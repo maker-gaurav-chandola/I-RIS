@@ -96,4 +96,59 @@ describe("interview session API", () => {
       database.exec("SELECT COUNT(*) FROM interview_turns")[0]?.values[0]?.[0],
     ).toBe(1);
   });
+  it("moves an expired session to closing through the GET API", async () => {
+    database = await createDatabase(":memory:");
+    app = buildApp(database, config);
+
+    const registration = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        email: "timer@example.com",
+        password: "timer-password",
+      },
+    });
+    const cookie = cookieFrom(registration.headers);
+
+    const start = await app.inject({
+      method: "POST",
+      url: "/api/interview-sessions",
+      headers: { cookie },
+      payload: {
+        interviewType: "Technical Interview",
+        topic: "JavaScript",
+        difficulty: "Medium",
+        duration: 1,
+        language: "Hinglish",
+        mode: "Text",
+      },
+    });
+
+    expect(start.statusCode).toBe(201);
+
+    const sessionId = start.json().session.id as string;
+    const expiredStartedAt = new Date(Date.now() - 60_001).toISOString();
+
+    database.run(
+      "UPDATE interview_sessions SET started_at = ? WHERE id = ?",
+      [expiredStartedAt, sessionId],
+    );
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/interview-sessions/${sessionId}`,
+      headers: { cookie },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().session.state).toBe("closing");
+    expect(response.json().session.currentQuestion).toBeNull();
+
+    const persisted = database.exec(
+      "SELECT status FROM interview_sessions WHERE id = ?",
+      [sessionId],
+    );
+
+    expect(persisted[0]?.values[0]?.[0]).toBe("closing");
+  });
 });
