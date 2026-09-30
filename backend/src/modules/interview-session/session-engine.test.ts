@@ -333,6 +333,99 @@ describe("Interview Session Engine", () => {
     ).toBe(1);
   });
 
+  it("handles a malformed AI analysis response as a failed turn", async () => {
+    const engine = await setup();
+    const session = engine.start("account-1", configuration);
+
+    const malformedProvider: AiProvider = {
+      async analyzeAnswer() {
+        return null as never;
+      },
+      async decideFollowUp() {
+        return {
+          shouldFollowUp: false,
+          reason: "Not reached because analysis response was malformed.",
+          followUpQuestion: null,
+        };
+      },
+    };
+
+    const withValidation = new SessionEngine(
+      database,
+      undefined,
+      undefined,
+      malformedProvider,
+    );
+
+    const next = await withValidation.submitAnswer(
+      "account-1",
+      session.id,
+      "A candidate answer with an invalid AI analysis response.",
+    );
+
+    expect(next.state).toBe("active");
+    expect(next.currentQuestion).toContain("practical example");
+    expect(next.lastTurnAnalysisStatus).toBe("failed");
+
+    expect(
+      database.exec(
+        "SELECT analysis_status FROM interview_turns WHERE turn_number = 1",
+      )[0]?.values[0]?.[0],
+    ).toBe("failed");
+  });
+
+  it("handles a malformed follow-up response through the fallback path", async () => {
+    const engine = await setup();
+    const session = engine.start("account-1", configuration);
+
+    const malformedProvider: AiProvider = {
+      async analyzeAnswer() {
+        return {
+          category: "weak",
+          technicalCorrectness: { assessment: "Thin answer.", uncertain: true },
+          relevance: { assessment: "Relevant.", uncertain: true },
+          completeness: { assessment: "Incomplete.", uncertain: true },
+          explanationQuality: { assessment: "Needs detail.", uncertain: true },
+          reasoning: { assessment: "Weak reasoning.", uncertain: true },
+          strengths: [],
+          missingImportantPoints: ["Add reasoning"],
+          improvementOpportunities: ["Explain the trade-off"],
+          analysisNotes: "Needs follow-up.",
+        };
+      },
+      async decideFollowUp() {
+        return {
+          shouldFollowUp: true,
+          reason: "Needs clarification.",
+          followUpQuestion: null,
+        } as never;
+      },
+    };
+
+    const withValidation = new SessionEngine(
+      database,
+      undefined,
+      undefined,
+      malformedProvider,
+    );
+
+    const next = await withValidation.submitAnswer(
+      "account-1",
+      session.id,
+      "A weak answer with a malformed follow-up response.",
+    );
+
+    expect(next.state).toBe("active");
+    expect(next.pendingFollowUpQuestion).toBeNull();
+    expect(next.currentQuestion).toContain("practical example");
+    expect(next.lastTurnAnalysisStatus).toBe("completed");
+
+    expect(
+      database.exec(
+        "SELECT analysis_status FROM interview_turns WHERE turn_number = 1",
+      )[0]?.values[0]?.[0],
+    ).toBe("completed");
+  });
   it("keeps the answer and session active when AI analysis fails", async () => {
     const engine = await setup();
     const session = engine.start("account-1", configuration);
@@ -597,3 +690,8 @@ describe("Interview Session Engine", () => {
     );
   });
 });
+
+
+
+
+
