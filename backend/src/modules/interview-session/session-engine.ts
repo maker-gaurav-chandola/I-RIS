@@ -85,11 +85,6 @@ function toState(value: unknown): SessionState {
 }
 
 export class SessionEngine {
-  private readonly plannedQuestionIndexBySession = new Map<string, number>();
-  private readonly pendingFollowUpBySession = new Map<
-    string,
-    { question: string; parentQuestion: string }
-  >();
 
   constructor(
     private readonly database: Database,
@@ -121,12 +116,10 @@ export class SessionEngine {
 
     const id = randomUUID();
     const startedAt = this.now().toISOString();
-    this.plannedQuestionIndexBySession.set(id, 0);
-    this.pendingFollowUpBySession.delete(id);
     this.database.run(
       `INSERT INTO interview_sessions
-        (id, account_id, interview_type, topic, difficulty, duration_minutes, language, mode, status, started_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+        (id, account_id, interview_type, topic, difficulty, duration_minutes, language, mode, planned_question_index, pending_follow_up_question, pending_follow_up_parent_question, status, started_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, 'active', ?, ?)`,
       [
         id,
         accountId,
@@ -161,8 +154,8 @@ export class SessionEngine {
       this.hasExpired(row.started_at, row.duration_minutes)
     ) {
       this.database.run(
-        "UPDATE interview_sessions SET status = 'closing' WHERE id = ? AND status = 'active'",
-        [sessionId],
+      "UPDATE interview_sessions SET status = 'closing', completed_at = NULL, pending_follow_up_question = NULL, pending_follow_up_parent_question = NULL WHERE id = ? AND account_id = ? AND status IN ('active', 'closing')",
+      [sessionId, accountId],
       );
       state = "closing";
     }
@@ -172,9 +165,12 @@ export class SessionEngine {
       [sessionId],
     );
     const turnCount = Number(turns[0]?.values[0]?.[0] ?? 0);
-    const plannedQuestionIndex =
-      this.plannedQuestionIndexBySession.get(sessionId) ?? 0;
-    const pendingFollowUp = this.pendingFollowUpBySession.get(sessionId);
+    const plannedQuestionIndex = Number(row.planned_question_index ?? 0);
+    const pendingFollowUpQuestion =
+      row.pending_follow_up_question != null
+        ? String(row.pending_follow_up_question)
+        : null;
+
     const latestTurn = firstRow(
       this.database,
       "SELECT analysis_status, analysis_json FROM interview_turns WHERE interview_session_id = ? ORDER BY turn_number DESC LIMIT 1",
@@ -201,11 +197,11 @@ export class SessionEngine {
       state,
       currentQuestion:
         state === "active"
-          ? (pendingFollowUp?.question ??
+          ? (pendingFollowUpQuestion ??
             this.questions.getQuestion(plannedQuestionIndex) ??
             null)
           : null,
-      pendingFollowUpQuestion: pendingFollowUp?.question ?? null,
+      pendingFollowUpQuestion,
       questionIndex: turnCount,
       turnCount,
       expectedScore:
@@ -236,9 +232,7 @@ export class SessionEngine {
 
     const turnId = randomUUID();
     const safeAnswer = answer.trim();
-    const isFollowUpAnswer = Boolean(
-      this.pendingFollowUpBySession.get(sessionId),
-    );
+    const isFollowUpAnswer = session.pendingFollowUpQuestion !== null;
     const questionToPersist = session.currentQuestion ?? null;
     this.database.run(
       `INSERT INTO interview_turns
@@ -254,8 +248,13 @@ export class SessionEngine {
       ],
     );
 
-    let plannedQuestionIndex =
-      this.plannedQuestionIndexBySession.get(sessionId) ?? 0;
+    let plannedQuestionIndex = Number(
+      firstRow(
+        this.database,
+        "SELECT planned_question_index FROM interview_sessions WHERE id = ? AND account_id = ?",
+        [sessionId, accountId],
+      )?.planned_question_index ?? 0,
+    );
     let followUpDecision: FollowUpDecision | null = null;
 
     try {
@@ -291,28 +290,35 @@ export class SessionEngine {
             followUpDecision.shouldFollowUp &&
             followUpDecision.followUpQuestion
           ) {
-            this.pendingFollowUpBySession.set(sessionId, {
-              question: followUpDecision.followUpQuestion,
-              parentQuestion: questionToPersist ?? "",
-            });
+            this.database.run(
+              "UPDATE interview_sessions SET pending_follow_up_question = ?, pending_follow_up_parent_question = ? WHERE id = ? AND account_id = ?",
+              [
+                followUpDecision.followUpQuestion,
+                questionToPersist ?? "",
+                sessionId,
+                accountId,
+              ],
+            );
           } else {
             plannedQuestionIndex += 1;
-            this.plannedQuestionIndexBySession.set(
-              sessionId,
-              plannedQuestionIndex,
+            this.database.run(
+              "UPDATE interview_sessions SET planned_question_index = ?, pending_follow_up_question = NULL, pending_follow_up_parent_question = NULL WHERE id = ? AND account_id = ?",
+              [plannedQuestionIndex, sessionId, accountId],
             );
           }
         } catch {
           plannedQuestionIndex += 1;
-          this.plannedQuestionIndexBySession.set(
-            sessionId,
-            plannedQuestionIndex,
+          this.database.run(
+            "UPDATE interview_sessions SET planned_question_index = ?, pending_follow_up_question = NULL, pending_follow_up_parent_question = NULL WHERE id = ? AND account_id = ?",
+            [plannedQuestionIndex, sessionId, accountId],
           );
         }
       } else {
-        this.pendingFollowUpBySession.delete(sessionId);
         plannedQuestionIndex += 1;
-        this.plannedQuestionIndexBySession.set(sessionId, plannedQuestionIndex);
+        this.database.run(
+          "UPDATE interview_sessions SET planned_question_index = ?, pending_follow_up_question = NULL, pending_follow_up_parent_question = NULL WHERE id = ? AND account_id = ?",
+          [plannedQuestionIndex, sessionId, accountId],
+        );
       }
     } catch (error) {
       this.database.run(
@@ -324,11 +330,16 @@ export class SessionEngine {
       );
       if (!isFollowUpAnswer) {
         plannedQuestionIndex += 1;
-        this.plannedQuestionIndexBySession.set(sessionId, plannedQuestionIndex);
+        this.database.run(
+          "UPDATE interview_sessions SET planned_question_index = ?, pending_follow_up_question = NULL, pending_follow_up_parent_question = NULL WHERE id = ? AND account_id = ?",
+          [plannedQuestionIndex, sessionId, accountId],
+        );
       } else {
-        this.pendingFollowUpBySession.delete(sessionId);
         plannedQuestionIndex += 1;
-        this.plannedQuestionIndexBySession.set(sessionId, plannedQuestionIndex);
+        this.database.run(
+          "UPDATE interview_sessions SET planned_question_index = ?, pending_follow_up_question = NULL, pending_follow_up_parent_question = NULL WHERE id = ? AND account_id = ?",
+          [plannedQuestionIndex, sessionId, accountId],
+        );
       }
     }
 
@@ -349,7 +360,6 @@ export class SessionEngine {
         "Only an active or closing session can move to the closing flow.",
       );
     }
-    this.pendingFollowUpBySession.delete(sessionId);
     this.database.run(
       "UPDATE interview_sessions SET status = 'closing', completed_at = NULL WHERE id = ? AND status IN ('active', 'closing')",
       [sessionId],

@@ -27,6 +27,9 @@ const schema = `
     status TEXT NOT NULL,
     started_at TEXT,
     completed_at TEXT,
+    planned_question_index INTEGER NOT NULL DEFAULT 0,
+    pending_follow_up_question TEXT,
+    pending_follow_up_parent_question TEXT,
     created_at TEXT NOT NULL
   );
 
@@ -68,6 +71,30 @@ function migrateAccountsTable(database: SqlJsDatabase): void {
   );
 }
 
+function migrateInterviewSessionsTable(database: SqlJsDatabase): void {
+  const columns =
+    database.exec("PRAGMA table_info(interview_sessions)")[0]?.values ?? [];
+  const columnNames = new Set(columns.map(([_, name]) => name));
+
+  if (!columnNames.has("planned_question_index")) {
+    database.exec(
+      "ALTER TABLE interview_sessions ADD COLUMN planned_question_index INTEGER NOT NULL DEFAULT 0",
+    );
+  }
+
+  if (!columnNames.has("pending_follow_up_question")) {
+    database.exec(
+      "ALTER TABLE interview_sessions ADD COLUMN pending_follow_up_question TEXT",
+    );
+  }
+
+  if (!columnNames.has("pending_follow_up_parent_question")) {
+    database.exec(
+      "ALTER TABLE interview_sessions ADD COLUMN pending_follow_up_parent_question TEXT",
+    );
+  }
+}
+
 function migrateInterviewTurnsTable(database: SqlJsDatabase): void {
   const columns =
     database.exec("PRAGMA table_info(interview_turns)")[0]?.values ?? [];
@@ -104,6 +131,7 @@ export async function createDatabase(
         : new SQL.Database();
   database.exec(schema);
   migrateAccountsTable(database);
+  migrateInterviewSessionsTable(database);
   migrateInterviewTurnsTable(database);
   return database;
 }

@@ -471,6 +471,124 @@ describe("Interview Session Engine", () => {
     );
   });
 
+  it("recovers persisted question state after a SessionEngine restart", async () => {
+    database = await createDatabase(":memory:");
+
+    database.run(
+      "INSERT INTO accounts (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
+      [
+        "account-1",
+        "candidate@example.com",
+        "test-hash",
+        "2026-09-11T00:00:00.000Z",
+      ],
+    );
+
+    const provider: AiProvider = {
+      async analyzeAnswer() {
+        return {
+          category: "partial",
+          technicalCorrectness: {
+            assessment: "Some understanding.",
+            uncertain: true,
+          },
+          relevance: {
+            assessment: "Mostly relevant.",
+            uncertain: true,
+          },
+          completeness: {
+            assessment: "Missing key detail.",
+            uncertain: true,
+          },
+          explanationQuality: {
+            assessment: "Underdeveloped explanation.",
+            uncertain: true,
+          },
+          reasoning: {
+            assessment: "Reasoning is thin.",
+            uncertain: true,
+          },
+          strengths: ["Relevant idea"],
+          missingImportantPoints: ["Need one concrete example"],
+          improvementOpportunities: ["Add more depth"],
+          analysisNotes: "Needs follow-up.",
+        };
+      },
+      async decideFollowUp() {
+        return {
+          shouldFollowUp: true,
+          reason: "Need clarification.",
+          followUpQuestion:
+            "Can you explain the main trade-off behind that idea?",
+        };
+      },
+    };
+
+    const firstEngine = new SessionEngine(
+      database,
+      undefined,
+      undefined,
+      provider,
+    );
+
+    const session = firstEngine.start("account-1", configuration);
+
+    const afterAnswer = await firstEngine.submitAnswer(
+      "account-1",
+      session.id,
+      "A short answer that needs clarification.",
+    );
+
+    expect(afterAnswer.pendingFollowUpQuestion).toBe(
+      "Can you explain the main trade-off behind that idea?",
+    );
+
+    const persisted = database.exec(
+      "SELECT planned_question_index, pending_follow_up_question, pending_follow_up_parent_question FROM interview_sessions WHERE id = ?",
+      [session.id],
+    )[0]?.values[0];
+
+    expect(persisted?.[0]).toBe(0);
+    expect(persisted?.[1]).toBe(
+      "Can you explain the main trade-off behind that idea?",
+    );
+    expect(persisted?.[2]).toBe(session.currentQuestion);
+
+    const restartedEngine = new SessionEngine(
+      database,
+      undefined,
+      undefined,
+      provider,
+    );
+
+    const recovered = restartedEngine.get("account-1", session.id);
+
+    expect(recovered.state).toBe("active");
+    expect(recovered.pendingFollowUpQuestion).toBe(
+      "Can you explain the main trade-off behind that idea?",
+    );
+    expect(recovered.currentQuestion).toBe(
+      "Can you explain the main trade-off behind that idea?",
+    );
+
+    const afterFollowUp = await restartedEngine.submitAnswer(
+      "account-1",
+      session.id,
+      "The trade-off is simplicity versus scalability.",
+    );
+
+    expect(afterFollowUp.pendingFollowUpQuestion).toBeNull();
+    expect(afterFollowUp.currentQuestion).toContain("practical example");
+
+    const finalPersisted = database.exec(
+      "SELECT planned_question_index, pending_follow_up_question, pending_follow_up_parent_question FROM interview_sessions WHERE id = ?",
+      [session.id],
+    )[0]?.values[0];
+
+    expect(finalPersisted?.[0]).toBe(1);
+    expect(finalPersisted?.[1]).toBeNull();
+    expect(finalPersisted?.[2]).toBeNull();
+  });
   it("rejects Voice mode without pretending voice is implemented", async () => {
     const engine = await setup();
     expectEngineError(
