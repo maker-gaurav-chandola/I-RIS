@@ -151,4 +151,213 @@ describe("interview session API", () => {
 
     expect(persisted[0]?.values[0]?.[0]).toBe("closing");
   });
+  it("closes a session and captures expected score through the API", async () => {
+    database = await createDatabase(":memory:");
+    app = buildApp(database, config);
+
+    const registration = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        email: "lifecycle@example.com",
+        password: "lifecycle-password",
+      },
+    });
+
+    const cookie = cookieFrom(registration.headers);
+
+    const start = await app.inject({
+      method: "POST",
+      url: "/api/interview-sessions",
+      headers: { cookie },
+      payload: {
+        interviewType: "Technical Interview",
+        topic: "JavaScript",
+        difficulty: "Medium",
+        duration: 15,
+        language: "Hinglish",
+        mode: "Text",
+      },
+    });
+
+    expect(start.statusCode).toBe(201);
+
+    const sessionId = start.json().session.id as string;
+
+    const close = await app.inject({
+      method: "POST",
+      url: `/api/interview-sessions/${sessionId}/close`,
+      headers: { cookie },
+      payload: {},
+    });
+
+    expect(close.statusCode).toBe(200);
+    expect(close.json().session.state).toBe("closing");
+
+    const expectedScore = await app.inject({
+      method: "POST",
+      url: `/api/interview-sessions/${sessionId}/expected-score`,
+      headers: { cookie },
+      payload: { expectedScore: 85 },
+    });
+
+    expect(expectedScore.statusCode).toBe(200);
+    expect(expectedScore.json().session.state).toBe("completed");
+    expect(expectedScore.json().session.expectedScore).toBe(85);
+
+    const persisted = database.exec(
+      "SELECT status, expected_score FROM interview_sessions WHERE id = ?",
+      [sessionId],
+    );
+
+    expect(persisted[0]?.values[0]?.[0]).toBe("completed");
+    expect(persisted[0]?.values[0]?.[1]).toBe(85);
+  });
+  it("generates and retrieves evaluation results through the API", async () => {
+    database = await createDatabase(":memory:");
+    app = buildApp(database, config);
+
+    const registration = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        email: "evaluation@example.com",
+        password: "evaluation-password",
+      },
+    });
+
+    const cookie = cookieFrom(registration.headers);
+
+    const start = await app.inject({
+      method: "POST",
+      url: "/api/interview-sessions",
+      headers: { cookie },
+      payload: {
+        interviewType: "Technical Interview",
+        topic: "JavaScript",
+        difficulty: "Medium",
+        duration: 15,
+        language: "Hinglish",
+        mode: "Text",
+      },
+    });
+
+    expect(start.statusCode).toBe(201);
+
+    const sessionId = start.json().session.id as string;
+
+    const answer = await app.inject({
+      method: "POST",
+      url: `/api/interview-sessions/${sessionId}/answers`,
+      headers: { cookie },
+      payload: {
+        answer:
+          "JavaScript uses lexical scope and closures allow a function to remember variables from its outer scope.",
+      },
+    });
+
+    expect(answer.statusCode).toBe(200);
+
+    const close = await app.inject({
+      method: "POST",
+      url: `/api/interview-sessions/${sessionId}/close`,
+      headers: { cookie },
+      payload: {},
+    });
+
+    expect(close.statusCode).toBe(200);
+    expect(close.json().session.state).toBe("closing");
+
+    const expectedScore = await app.inject({
+      method: "POST",
+      url: `/api/interview-sessions/${sessionId}/expected-score`,
+      headers: { cookie },
+      payload: { expectedScore: 80 },
+    });
+
+    expect(expectedScore.statusCode).toBe(200);
+    expect(expectedScore.json().session.state).toBe("completed");
+
+    const evaluate = await app.inject({
+      method: "POST",
+      url: `/api/interview-sessions/${sessionId}/evaluate`,
+      headers: { cookie },
+      payload: {},
+    });
+
+    expect(evaluate.statusCode).toBe(200);
+    expect(evaluate.json().evaluation.actualScore).toBeGreaterThan(0);
+    expect(evaluate.json().evaluation.actualScore).toBeLessThanOrEqual(100);
+
+    const results = await app.inject({
+      method: "GET",
+      url: `/api/interview-sessions/${sessionId}/results`,
+      headers: { cookie },
+    });
+
+    expect(results.statusCode).toBe(200);
+    expect(results.json().evaluation.actualScore).toBe(
+      evaluate.json().evaluation.actualScore,
+    );
+
+    const persisted = database.exec(
+      "SELECT actual_score FROM evaluation_results WHERE interview_session_id = ?",
+      [sessionId],
+    );
+
+    expect(persisted[0]?.values[0]?.[0]).toBe(
+      evaluate.json().evaluation.actualScore,
+    );
+  });
+  it("terminates an active session through the API", async () => {
+    database = await createDatabase(":memory:");
+    app = buildApp(database, config);
+
+    const registration = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        email: "terminate@example.com",
+        password: "terminate-password",
+      },
+    });
+
+    const cookie = cookieFrom(registration.headers);
+
+    const start = await app.inject({
+      method: "POST",
+      url: "/api/interview-sessions",
+      headers: { cookie },
+      payload: {
+        interviewType: "Technical Interview",
+        topic: "JavaScript",
+        difficulty: "Medium",
+        duration: 15,
+        language: "Hinglish",
+        mode: "Text",
+      },
+    });
+
+    expect(start.statusCode).toBe(201);
+
+    const sessionId = start.json().session.id as string;
+
+    const terminate = await app.inject({
+      method: "POST",
+      url: `/api/interview-sessions/${sessionId}/terminate`,
+      headers: { cookie },
+      payload: {},
+    });
+
+    expect(terminate.statusCode).toBe(200);
+    expect(terminate.json().session.state).toBe("terminated");
+
+    const persisted = database.exec(
+      "SELECT status, completed_at FROM interview_sessions WHERE id = ?",
+      [sessionId],
+    );
+
+    expect(persisted[0]?.values[0]?.[0]).toBe("terminated");
+    expect(persisted[0]?.values[0]?.[1]).not.toBeNull();
+  });
 });
