@@ -9,6 +9,10 @@ describe("configuration", () => {
       port: 3000,
       databasePath: "./data/i-ris.sqlite",
       frontendOrigin: "http://localhost:5173",
+      aiProvider: "freellmapi",
+      aiBaseUrl: "http://localhost:3001/v1",
+      aiApiKey: "",
+      aiModel: "auto",
     });
   });
 
@@ -17,12 +21,20 @@ describe("configuration", () => {
       PORT: "3001",
       DATABASE_PATH: "./data/test.sqlite",
       FRONTEND_ORIGIN: "http://localhost:5174",
+      AI_PROVIDER: "freellmapi",
+      AI_BASE_URL: "http://localhost:3001/v1",
+      AI_API_KEY: "test-api-key",
+      AI_MODEL: "gemini-2.5-flash",
     });
 
     expect(config).toEqual({
       port: 3001,
       databasePath: "./data/test.sqlite",
       frontendOrigin: "http://localhost:5174",
+      aiProvider: "freellmapi",
+      aiBaseUrl: "http://localhost:3001/v1",
+      aiApiKey: "test-api-key",
+      aiModel: "gemini-2.5-flash",
     });
   });
 

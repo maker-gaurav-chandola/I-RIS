@@ -1,5 +1,7 @@
-import { randomUUID } from "node:crypto";
+﻿import { randomUUID } from "node:crypto";
 import type { Database } from "sql.js";
+import type { AppConfig } from "../../config.js";
+import { createFreeLlmApiProvider } from "../ai/freellmapi-provider.js";
 import {
   createAiProviderBoundary,
   type AiProvider,
@@ -258,7 +260,7 @@ export class SessionEngine {
     let followUpDecision: FollowUpDecision | null = null;
 
     try {
-      const analysis = await this.aiProvider.analyzeAnswer({
+const analysis = await this.aiProvider.analyzeAnswer({
         question: questionToPersist ?? "",
         answer: safeAnswer,
         interviewType: session.interviewType,
@@ -267,7 +269,7 @@ export class SessionEngine {
         language: session.language,
         mode: session.mode,
       });
-      this.validateAnalysis(analysis);
+this.validateAnalysis(analysis);
       this.database.run(
         "UPDATE interview_turns SET analysis_status = 'completed', analysis_json = ?, analysis_error = NULL WHERE id = ?",
         [JSON.stringify(analysis), turnId],
@@ -275,7 +277,7 @@ export class SessionEngine {
 
       if (!isFollowUpAnswer) {
         try {
-          followUpDecision = await this.aiProvider.decideFollowUp({
+followUpDecision = await this.aiProvider.decideFollowUp({
             question: questionToPersist ?? "",
             answer: safeAnswer,
             analysis,
@@ -285,7 +287,7 @@ export class SessionEngine {
             language: session.language,
             mode: session.mode,
           });
-          this.validateFollowUpDecision(followUpDecision);
+this.validateFollowUpDecision(followUpDecision);
           if (
             followUpDecision.shouldFollowUp &&
             followUpDecision.followUpQuestion
@@ -567,6 +569,20 @@ export class SessionEngine {
   }
 }
 
-export function createSessionEngine(database: Database): SessionEngine {
-  return new SessionEngine(database);
+export function createSessionEngine(database: Database, config?: AppConfig): SessionEngine {
+  const aiProvider =
+    config?.aiProvider === "freellmapi" && config.aiBaseUrl
+      ? createFreeLlmApiProvider({
+          baseUrl: config.aiBaseUrl,
+          apiKey: config.aiApiKey ?? "",
+          model: config.aiModel ?? "auto",
+        })
+      : undefined;
+
+  return new SessionEngine(database, undefined, undefined, aiProvider);
 }
+
+
+
+
+

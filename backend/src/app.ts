@@ -25,7 +25,7 @@ export function buildApp(
 ): FastifyInstance {
   const app = Fastify({ logger: false });
   const sessions = new Map<string, string>();
-  const sessionEngine = createSessionEngine(database);
+  const sessionEngine = createSessionEngine(database, config);
   const historyProgress = createHistoryProgressBoundary(database);
 
   app.register(cookie);
