@@ -41,6 +41,14 @@ export function ActiveInterview() {
 
   useEffect(() => {
     loadSession();
+
+    const intervalId = window.setInterval(() => {
+      loadSession();
+    }, 5000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
   }, [loadSession]);
 
   if (!sessionId) {
