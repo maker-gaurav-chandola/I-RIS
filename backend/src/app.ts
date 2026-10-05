@@ -1,4 +1,5 @@
 import cookie from "@fastify/cookie";
+import websocket from "@fastify/websocket";
 import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { FastifyReply, FastifyRequest } from "fastify";
@@ -16,6 +17,7 @@ import {
   type SessionConfiguration,
 } from "./modules/interview-session/session-engine.js";
 import { createHistoryProgressBoundary } from "./modules/history-progress/history-progress-boundary.js";
+import { createGroqSttProvider } from "./providers/stt/groq-stt-provider.js";
 
 const sessionCookieName = "i_ris_session";
 
@@ -27,8 +29,17 @@ export function buildApp(
   const sessions = new Map<string, string>();
   const sessionEngine = createSessionEngine(database, config);
   const historyProgress = createHistoryProgressBoundary(database);
+  const sttProvider =
+    config.sttProvider === "groq" && config.sttApiKey
+      ? createGroqSttProvider({
+          apiKey: config.sttApiKey,
+          model: config.sttModel,
+          language: config.sttLanguage,
+        })
+      : null;
 
   app.register(cookie);
+  app.register(websocket);
   app.register(cors, { origin: config.frontendOrigin, credentials: true });
 
   const setSessionCookie = (reply: FastifyReply, token: string): void => {
@@ -46,6 +57,169 @@ export function buildApp(
     return accountId ? findAccountById(database, accountId) : null;
   };
 
+  app.register(async (voiceApp) => {
+    voiceApp.addHook("preValidation", async (request, reply) => {
+      const account = getAuthenticatedAccount(request);
+      const sessionId = (request.query as { sessionId?: string }).sessionId;
+
+      if (!account || !sessionId) {
+        return reply
+          .code(401)
+          .send({ error: "Voice session authentication required." });
+      }
+
+      try {
+        const session = sessionEngine.get(account.id, sessionId);
+
+        if (session.mode !== "Voice") {
+          return reply.code(400).send({
+            error: "Voice transport requires a Voice interview session.",
+          });
+        }
+
+        if (session.state !== "active") {
+          return reply.code(409).send({
+            error: "Voice transport requires an active interview session.",
+          });
+        }
+      } catch {
+        return reply
+          .code(404)
+          .send({ error: "Interview session was not found." });
+      }
+    });
+
+    voiceApp.get("/voice", { websocket: true }, (socket) => {
+      console.log("[VOICE] websocket connected");
+
+      const audioChunks: Buffer[] = [];
+
+      socket.send(
+        JSON.stringify({ type: "state", state: "connecting" }),
+      );
+
+      socket.on("message", async (rawMessage: Buffer, isBinary: boolean) => {
+        if (isBinary) {
+          audioChunks.push(Buffer.from(rawMessage));
+          return;
+        }
+
+        try {
+          const message = JSON.parse(rawMessage.toString()) as {
+            type?: string;
+          };
+
+          if (message.type === "interrupt") {
+            audioChunks.length = 0;
+            socket.send(JSON.stringify({ type: "interrupted" }));
+            return;
+          }
+
+          if (message.type === "stopListening") {
+            socket.send(
+              JSON.stringify({ type: "state", state: "processing" }),
+            );
+
+            if (!sttProvider) {
+              socket.send(
+                JSON.stringify({
+                  type: "error",
+                  code: "STT_FAILED",
+                  message: "Speech-to-text provider is not configured.",
+                }),
+              );
+              return;
+            }
+
+            try {
+              const audio = Buffer.concat(audioChunks);
+              audioChunks.length = 0;
+
+              const result = await sttProvider.transcribe(
+                audio.buffer.slice(
+                  audio.byteOffset,
+                  audio.byteOffset + audio.byteLength,
+                ),
+              );
+
+              socket.send(
+                JSON.stringify({
+                  type: "transcription",
+                  transcript: result.transcript,
+                  isFinal: result.isFinal,
+                }),
+              );
+
+              if (result.transcript.trim()) {
+                const account = getAuthenticatedAccount({
+                  headers: socket.request.headers,
+                } as FastifyRequest);
+
+                const sessionId = (
+                  new URL(
+                    socket.request.url,
+                    `http://${socket.request.headers.host ?? "localhost"}`,
+                  ).searchParams.get("sessionId")
+                );
+
+                if (!account || !sessionId) {
+                  socket.send(
+                    JSON.stringify({
+                      type: "error",
+                      code: "CONNECTION_FAILED",
+                      message: "Voice session authentication required.",
+                    }),
+                  );
+                  return;
+                }
+
+                const session = await sessionEngine.submitAnswer(
+                  account.id,
+                  sessionId,
+                  result.transcript,
+                );
+
+                socket.send(
+                  JSON.stringify({
+                    type: "session",
+                    session,
+                  }),
+                );
+              }
+
+              socket.send(JSON.stringify({ type: "turnComplete" }));
+              socket.send(
+                JSON.stringify({ type: "state", state: "listening" }),
+              );
+            } catch (error) {
+              console.error("[VOICE] STT failed", error);
+              socket.send(
+                JSON.stringify({
+                  type: "error",
+                  code: "STT_FAILED",
+                  message: "Speech transcription failed.",
+                }),
+              );
+            }
+
+            return;
+          }
+
+          socket.send(
+            JSON.stringify({ type: "state", state: "listening" }),
+          );
+        } catch {
+          socket.send(
+            JSON.stringify({
+              type: "error",
+              code: "CONNECTION_FAILED",
+              message: "Invalid voice message.",
+            }),
+          );
+        }
+      });
+    });
+  });
   app.get("/api/health", async () => {
     try {
       database.exec("SELECT 1");

@@ -1,4 +1,4 @@
-import {
+﻿import {
   useState,
   type ChangeEvent,
   type FormEvent,
@@ -13,7 +13,7 @@ export const interviewTypes = [
 export const difficulties = ["Easy", "Medium", "Hard"] as const;
 export const durations = ["15", "30", "45"] as const;
 export const languages = ["Hinglish", "English", "Hindi"] as const;
-export const modes = ["Text"] as const;
+export const modes = ["Text", "Voice"] as const;
 
 export type InterviewConfiguration = {
   interviewType: string;
@@ -116,7 +116,7 @@ export function InterviewConfiguration({
       <div className="configuration-intro">
         <p className="eyebrow">Interview setup</p>
         <h2 id="configuration-heading">Configure Your Interview</h2>
-        <p>Select the scope and format for a focused text interview session.</p>
+        <p>Select the scope and format for a focused interview session.</p>
       </div>
 
       <form className="configuration-form" onSubmit={submit} noValidate>
@@ -227,3 +227,4 @@ export function InterviewConfiguration({
     </section>
   );
 }
+

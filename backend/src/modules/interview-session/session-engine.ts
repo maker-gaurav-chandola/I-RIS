@@ -1,4 +1,4 @@
-﻿import { randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { Database } from "sql.js";
 import type { AppConfig } from "../../config.js";
 import { createFreeLlmApiProvider } from "../ai/freellmapi-provider.js";
@@ -100,10 +100,10 @@ export class SessionEngine {
     accountId: string,
     configuration: SessionConfiguration,
   ): SessionSnapshot {
-    if (configuration.mode !== "Text") {
+    if (configuration.mode !== "Text" && configuration.mode !== "Voice") {
       throw new SessionEngineError(
-        "VOICE_UNSUPPORTED",
-        "Only Text mode is available in Step 6.",
+        "UNSUPPORTED_MODE",
+        "Only Text and Voice modes are supported.",
       );
     }
     if (
@@ -581,8 +581,3 @@ export function createSessionEngine(database: Database, config?: AppConfig): Ses
 
   return new SessionEngine(database, undefined, undefined, aiProvider);
 }
-
-
-
-
-

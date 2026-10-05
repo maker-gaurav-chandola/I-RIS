@@ -13,6 +13,10 @@ describe("configuration", () => {
       aiBaseUrl: "http://localhost:3001/v1",
       aiApiKey: "",
       aiModel: "auto",
+      sttProvider: "groq",
+      sttApiKey: "",
+      sttModel: "whisper-large-v3-turbo",
+      sttLanguage: "en",
     });
   });
 
@@ -25,6 +29,10 @@ describe("configuration", () => {
       AI_BASE_URL: "http://localhost:3001/v1",
       AI_API_KEY: "test-api-key",
       AI_MODEL: "gemini-2.5-flash",
+      STT_PROVIDER: "groq",
+      STT_API_KEY: "test-groq-key",
+      STT_MODEL: "whisper-large-v3",
+      STT_LANGUAGE: "hi",
     });
 
     expect(config).toEqual({
@@ -35,6 +43,10 @@ describe("configuration", () => {
       aiBaseUrl: "http://localhost:3001/v1",
       aiApiKey: "test-api-key",
       aiModel: "gemini-2.5-flash",
+      sttProvider: "groq",
+      sttApiKey: "test-groq-key",
+      sttModel: "whisper-large-v3",
+      sttLanguage: "hi",
     });
   });
 

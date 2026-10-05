@@ -8,6 +8,10 @@ export type AppConfig = {
   aiBaseUrl?: string;
   aiApiKey?: string;
   aiModel?: string;
+  sttProvider?: string;
+  sttApiKey?: string;
+  sttModel?: string;
+  sttLanguage?: string;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -19,5 +23,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     aiBaseUrl: env.AI_BASE_URL ?? "http://localhost:3001/v1",
     aiApiKey: env.AI_API_KEY ?? "",
     aiModel: env.AI_MODEL ?? "auto",
+    sttProvider: env.STT_PROVIDER ?? "groq",
+    sttApiKey: env.STT_API_KEY ?? "",
+    sttModel: env.STT_MODEL ?? "whisper-large-v3-turbo",
+    sttLanguage: env.STT_LANGUAGE ?? "en",
   };
 }

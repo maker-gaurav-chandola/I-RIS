@@ -1,11 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
+ï»¿import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Card } from "@/components/common/Card";
 import { Button } from "@/components/common/Button";
 import { Spinner } from "@/components/common/Spinner";
 import { ErrorBanner } from "@/components/feedback/ErrorBanner";
-import { StateBadge } from "@/components/interview/StateBadge";
 import { interviewService } from "@/services/interview";
+import { createVoiceSession } from "@/services/voiceSession";
+import type {
+  VoiceSession,
+  VoiceState,
+  VoiceStateSnapshot,
+} from "@/types/voice";
 import { evaluationService } from "@/services/evaluation";
 import { ApiError } from "@/services/http";
 import type { InterviewSession } from "@/types/interview";
@@ -18,8 +23,15 @@ export function ActiveInterview() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
   const [answer, setAnswer] = useState("");
   const [expectedScore, setExpectedScore] = useState(70);
+
+  const [voiceSession, setVoiceSession] = useState<VoiceSession | null>(null);
+  const [voiceState, setVoiceState] = useState<VoiceState>("idle");
+  const [voiceTranscript, setVoiceTranscript] = useState("");
+
+  const currentState = session?.state;
 
   const loadSession = useCallback(async () => {
     if (!sessionId) return;
@@ -40,10 +52,10 @@ export function ActiveInterview() {
   }, [sessionId]);
 
   useEffect(() => {
-    loadSession();
+    void loadSession();
 
     const intervalId = window.setInterval(() => {
-      loadSession();
+      void loadSession();
     }, 5000);
 
     return () => {
@@ -51,9 +63,77 @@ export function ActiveInterview() {
     };
   }, [loadSession]);
 
+  /*
+   * Voice lifecycle.
+   *
+   * Important:
+   * This connects the existing VoiceSession abstraction to the UI.
+   * The backend/provider still needs to provide the complete STT/TTS
+   * pipeline separately.
+   */
+  useEffect(() => {
+    if (
+      session?.mode !== "Voice" ||
+      currentState !== "active" ||
+      !sessionId
+    ) {
+      return;
+    }
+
+    const protocol =
+      window.location.protocol === "https:" ? "wss" : "ws";
+
+    const sessionInstance = createVoiceSession({
+      url: `${protocol}://${window.location.host}/voice`,
+      interviewSessionId,
+
+      onStateChange: (snapshot: VoiceStateSnapshot) => {
+        setVoiceState(snapshot.state);
+
+        if (snapshot.errorMessage) {
+          setError(snapshot.errorMessage);
+        }
+      },
+
+      onTranscript: (transcript, isFinal) => {
+        if (!isFinal) return;
+
+        setVoiceTranscript((current) =>
+          current ? `${current} ${transcript}` : transcript,
+        );
+
+        setAnswer((current) =>
+          current ? `${current} ${transcript}` : transcript,
+        );
+      },
+
+      onError: (_code, message) => {
+        setError(message);
+      },
+    });
+
+    setVoiceSession(sessionInstance);
+
+    void sessionInstance.connect().catch((err) => {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Voice connection failed",
+      );
+    });
+
+    return () => {
+      void sessionInstance.disconnect();
+      setVoiceSession(null);
+      setVoiceState("idle");
+    };
+  }, [session?.mode, currentState, sessionId]);
+
   if (!sessionId) {
     return <ErrorBanner message="Interview session ID is missing." />;
   }
+
+  const interviewSessionId = sessionId;
 
   if (loading) {
     return <Spinner label="Loading interview" />;
@@ -63,8 +143,8 @@ export function ActiveInterview() {
     return <ErrorBanner message={error ?? "Interview not found"} />;
   }
 
-  const sid = sessionId;
   const state = session.state;
+  const isVoice = session.mode === "Voice";
 
   async function withBusy(action: () => Promise<void>) {
     setBusy(true);
@@ -84,8 +164,10 @@ export function ActiveInterview() {
   }
 
   async function handleSubmitAnswer() {
+    if (!answer.trim()) return;
+
     await withBusy(async () => {
-      const updated = await interviewService.submitAnswer(sid, {
+      const updated = await interviewService.submitAnswer(interviewSessionId, {
         answer,
       });
 
@@ -94,11 +176,95 @@ export function ActiveInterview() {
     });
   }
 
+  async function handleStartSpeaking() {
+    if (!voiceSession) {
+      setError("Voice session is not ready yet.");
+      return;
+    }
+
+    try {
+      setError(null);
+      setVoiceTranscript("");
+      await voiceSession.startListening();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not access the microphone.",
+      );
+    }
+  }
+
+  async function handleStopSpeaking() {
+    if (!voiceSession) return;
+
+    try {
+      await voiceSession.stopListening();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not stop microphone capture.",
+      );
+    }
+  }
+
+  async function handleInterrupt() {
+    if (!voiceSession) return;
+
+    try {
+      await voiceSession.interrupt();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not interrupt voice session.",
+      );
+    }
+  }
+
+  async function handleVoiceSubmit() {
+    if (!answer.trim()) {
+      setError("Speak an answer before submitting.");
+      return;
+    }
+
+    if (voiceSession) {
+      try {
+        await voiceSession.stopListening();
+      } catch {
+        // The answer can still be submitted if microphone shutdown fails.
+      }
+    }
+
+    await handleSubmitAnswer();
+
+    setVoiceTranscript("");
+  }
+
+  async function handleCloseInterview() {
+    await withBusy(async () => {
+      if (voiceSession) {
+        try {
+          await voiceSession.stopListening();
+        } catch {
+          // Continue with interview closing.
+        }
+      }
+
+      const updated = await interviewService.submitClosing(interviewSessionId);
+      setSession(updated);
+    });
+  }
+
   async function handleExpectedScore() {
     await withBusy(async () => {
-      const updated = await interviewService.submitExpectedScore(sid, {
-        expectedScore,
-      });
+      const updated = await interviewService.submitExpectedScore(
+        interviewSessionId,
+        {
+          expectedScore,
+        },
+      );
 
       setSession(updated);
     });
@@ -106,61 +272,251 @@ export function ActiveInterview() {
 
   async function handleEvaluate() {
     await withBusy(async () => {
-      await evaluationService.evaluate(sid);
-      navigate(`/interview/${sid}/results`);
+      await evaluationService.evaluate(interviewSessionId);
+      navigate(`/interview/${interviewSessionId}/results`);
     });
   }
 
+  function getVoiceLabel() {
+    switch (voiceState) {
+      case "connecting":
+        return "Connecting...";
+      case "listening":
+        return "Listening";
+      case "processing":
+        return "Processing";
+      case "speaking":
+        return "Interviewer speaking";
+      case "interrupted":
+        return "Interrupted";
+      case "error":
+        return "Voice error";
+      case "disconnected":
+        return "Disconnected";
+      default:
+        return "Ready to speak";
+    }
+  }
+
   return (
-    <div className="page interview-page">
-      <div className="page-header">
+    <div className="page-stack active-interview-page">
+
+      <div className="interview-header-card">
         <div>
+          <div className="eyebrow">
+            INTERVIEW WORKSPACE / {isVoice ? "VOICE" : "TEXT"}
+          </div>
+
           <h1>{session.topic}</h1>
+
           <p className="muted">
-            {session.interviewType} · {session.difficulty} ·{" "}
-            {session.language} · {session.mode}
+            {session.interviewType} Â· {session.difficulty} Â·{" "}
+            {session.language}
           </p>
         </div>
 
-        <StateBadge state={state} />
+        <div className="session-status-pill">
+          <span className="status-dot" />
+          {session.duration} min session
+        </div>
       </div>
 
-      <ErrorBanner message={error} />
+      <div className="interview-progress-strip">
+        <div className="progress-step active">
+          <strong>01</strong>
+          <span>Question</span>
+        </div>
+
+        <div className="progress-step active">
+          <strong>02</strong>
+          <span>Response</span>
+        </div>
+
+        <div className="progress-step">
+          <strong>03</strong>
+          <span>Analysis</span>
+        </div>
+
+        <div className="progress-step">
+          <strong>04</strong>
+          <span>Next move</span>
+        </div>
+      </div>
+
+      {error && <ErrorBanner message={error} />}
 
       {state === "active" && (
-        <Card title="Interview">
-          <div className="question-block">
-            <p className="block-label">Question</p>
+        <>
+          <Card>
+            <div className="question-panel">
+              <div className="eyebrow">CURRENT QUESTION</div>
 
-            <p className="question-text">
-              {session.currentQuestion ??
-                "Waiting for the next question..."}
-            </p>
-          </div>
+              <div className="question-text">
+                {session.currentQuestion ??
+                  "The interviewer is preparing the next question..."}
+              </div>
+            </div>
+          </Card>
 
-          <div className="response-block">
-            <p className="block-label">Your response</p>
+          {isVoice ? (
+            <Card>
+              <div className="voice-workspace">
 
-            <textarea
-              className="answer-input"
-              rows={7}
-              placeholder="Type your answer..."
-              value={answer}
-              onChange={(event) => setAnswer(event.target.value)}
-              disabled={busy}
-            />
-          </div>
+                <div className="voice-interviewer">
+                  <div className="voice-avatar">
+                    <span className="voice-avatar-pulse" />
+                    <span>R</span>
+                  </div>
 
-          <div className="interview-submit-row">
-            <Button
-              onClick={handleSubmitAnswer}
-              loading={busy}
-              disabled={!answer.trim()}
-            >
-              Submit answer
-            </Button>
-          </div>
-        </Card>
+                  <div>
+                    <div className="eyebrow">
+                      I-RIS INTERVIEWER
+                    </div>
+
+                    <h2>Voice Interview</h2>
+
+                    <p className="muted">
+                      Speak naturally. I-RIS will capture your response
+                      and continue the interview.
+                    </p>
+                  </div>
+                </div>
+
+                <div className={`voice-state voice-state-${voiceState}`}>
+                  <span className="voice-state-dot" />
+                  {getVoiceLabel()}
+                </div>
+
+                <div className="voice-mic-zone">
+                  <button
+                    type="button"
+                    className={`voice-mic-button ${
+                      voiceState === "listening"
+                        ? "is-listening"
+                        : ""
+                    }`}
+                    onClick={
+                      voiceState === "listening"
+                        ? handleStopSpeaking
+                        : handleStartSpeaking
+                    }
+                    disabled={
+                      busy ||
+                      voiceState === "connecting" ||
+                      voiceState === "processing"
+                    }
+                    aria-label={
+                      voiceState === "listening"
+                        ? "Stop speaking"
+                        : "Start speaking"
+                    }
+                  >
+                    <span className="voice-mic-icon">ðŸŽ™</span>
+                  </button>
+
+                  <div className="voice-mic-title">
+                    {voiceState === "listening"
+                      ? "Listening..."
+                      : "Tap to speak"}
+                  </div>
+
+                  <div className="voice-mic-help">
+                    {voiceState === "listening"
+                      ? "Speak your answer clearly"
+                      : "Microphone is ready"}
+                  </div>
+                </div>
+
+                <div className="voice-transcript-panel">
+                  <div className="voice-transcript-header">
+                    <span>LIVE TRANSCRIPT</span>
+
+                    {voiceState === "listening" && (
+                      <span className="transcript-live">
+                        LIVE
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="voice-transcript">
+                    {voiceTranscript ||
+                      "Your spoken response will appear here..."}
+                  </div>
+                </div>
+
+                <div className="voice-controls">
+                  <Button
+                    variant="ghost"
+                    onClick={handleInterrupt}
+                    disabled={
+                      !voiceSession ||
+                      busy ||
+                      voiceState === "idle" ||
+                      voiceState === "disconnected"
+                    }
+                  >
+                    Interrupt
+                  </Button>
+
+                  <Button
+                    onClick={handleVoiceSubmit}
+                    loading={busy}
+                    disabled={!answer.trim()}
+                  >
+                    Submit response
+                  </Button>
+                </div>
+
+                <div className="voice-secondary-actions">
+                  <Button
+                    variant="ghost"
+                    onClick={handleCloseInterview}
+                    disabled={busy}
+                  >
+                    End interview
+                  </Button>
+                </div>
+
+              </div>
+            </Card>
+          ) : (
+            <Card>
+              <div className="text-response-workspace">
+                <label className="field-label">
+                  Your response
+                </label>
+
+                <textarea
+                  className="text-response-area"
+                  value={answer}
+                  onChange={(event) =>
+                    setAnswer(event.target.value)
+                  }
+                  placeholder="Write your answer here"
+                  disabled={busy}
+                />
+
+                <div className="response-actions">
+                  <Button
+                    onClick={handleSubmitAnswer}
+                    loading={busy}
+                    disabled={!answer.trim()}
+                  >
+                    Submit answer
+                  </Button>
+
+                  <Button
+                    variant="ghost"
+                    onClick={handleCloseInterview}
+                    disabled={busy}
+                  >
+                    End interview
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          )}
+        </>
       )}
 
       {state === "closing" && (
@@ -225,9 +581,7 @@ export function ActiveInterview() {
             accept answers.
           </p>
 
-          <Button
-            onClick={() => navigate("/dashboard")}
-          >
+          <Button onClick={() => navigate("/dashboard")}>
             Back to dashboard
           </Button>
         </Card>
@@ -239,13 +593,13 @@ export function ActiveInterview() {
             This interview has not started yet.
           </p>
 
-          <Button
-            onClick={() => navigate("/interview/setup")}
-          >
+          <Button onClick={() => navigate("/interview/setup")}>
             Back to setup
           </Button>
         </Card>
       )}
+
     </div>
   );
 }
+

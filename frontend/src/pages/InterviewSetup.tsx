@@ -9,10 +9,10 @@ import type { InterviewSessionConfig } from "@/types/interview";
 const DIFFICULTIES = ["Beginner", "Intermediate", "Advanced"];
 const LANGUAGES: InterviewSessionConfig["language"][] = ["Hinglish", "English", "Hindi"];
 const TYPES: InterviewSessionConfig["interviewType"][] = ["Technical", "HR", "Mixed"];
-// Only "Text" is actually implemented server-side today.
-const MODES = ["Text"];
+// Text and controlled Voice interaction are available in Phase 2.
+const MODES = ["Text", "Voice"];
 
-// Configuration only — this page never talks to the session engine. The
+// Configuration only â€” this page never talks to the session engine. The
 // session is created once the candidate confirms on the Ready page.
 export function InterviewSetup() {
   const navigate = useNavigate();

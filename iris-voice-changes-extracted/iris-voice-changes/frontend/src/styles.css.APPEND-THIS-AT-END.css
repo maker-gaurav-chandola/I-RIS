@@ -1,0 +1,38 @@
+/* Voice workspace additions (shared VoiceWorkspace component) */
+button.voice-mic-orb {
+  padding: 0;
+  min-height: 0;
+  color: inherit;
+  cursor: pointer;
+}
+
+button.voice-mic-orb:hover:not(:disabled) {
+  background: #1b2a32;
+  border-color: #5dd8b6;
+  transform: none;
+}
+
+button.voice-mic-orb:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.voice-interim {
+  color: #7f939c;
+  font-style: italic;
+}
+
+.voice-end-confirm {
+  font-size: 0.78rem;
+  color: #b8c7cc;
+}
+
+.voice-text-mode-note {
+  margin: 0 0 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.82rem;
+  color: #9eacb5;
+}

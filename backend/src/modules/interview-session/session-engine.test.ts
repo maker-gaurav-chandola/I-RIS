@@ -682,12 +682,16 @@ describe("Interview Session Engine", () => {
     expect(finalPersisted?.[1]).toBeNull();
     expect(finalPersisted?.[2]).toBeNull();
   });
-  it("rejects Voice mode without pretending voice is implemented", async () => {
+  it("starts and persists a Voice mode session", async () => {
     const engine = await setup();
-    expectEngineError(
-      () => engine.start("account-1", { ...configuration, mode: "Voice" }),
-      "VOICE_UNSUPPORTED",
-    );
+    const session = engine.start("account-1", {
+      ...configuration,
+      mode: "Voice",
+    });
+
+    expect(session.mode).toBe("Voice");
+    expect(session.state).toBe("active");
+    expect(session.currentQuestion).toBeTruthy();
   });
 });
 

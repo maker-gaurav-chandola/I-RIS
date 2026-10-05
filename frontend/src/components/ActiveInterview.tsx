@@ -1,4 +1,8 @@
 import { useEffect, useState, type FormEvent, type ReactElement } from "react";
+import { VoiceWorkspace } from "./interview/VoiceWorkspace";
+import { useVoiceInterview } from "@/hooks/useVoiceInterview";
+import { buildVoiceUrl } from "@/services/voiceSession";
+import { isVoiceMode } from "@/services/interviewMode";
 
 type AnalysisCategory =
   | "strong"
@@ -71,6 +75,16 @@ export function ActiveInterview({
   const [submittingScore, setSubmittingScore] = useState(false);
   const [evaluation, setEvaluation] = useState<EvaluationResult | null>(null);
   const [loadingResults, setLoadingResults] = useState(false);
+  // Voice is the primary mode; this only flips when the candidate (or a
+  // voice failure) sends them to the text fallback.
+  const [textFallback, setTextFallback] = useState(false);
+
+  const voiceMode = session != null && isVoiceMode(session.mode);
+  const voice = useVoiceInterview({
+    enabled: voiceMode && session?.state === "active" && !textFallback,
+    sessionId,
+    voiceUrl: buildVoiceUrl(apiBaseUrl),
+  });
 
   async function loadSession(): Promise<void> {
     const response = await fetch(
@@ -93,36 +107,50 @@ export function ActiveInterview({
     void loadSession();
   }, [sessionId]);
 
+  async function submitAnswerText(text: string): Promise<boolean> {
+    if (!text.trim()) {
+      setError("Answer cannot be empty.");
+      return false;
+    }
+    setError("");
+    setSubmitting(true);
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/api/interview-sessions/${sessionId}/answers`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ answer: text }),
+        },
+      );
+      const result = (await response.json()) as {
+        session?: Session;
+        error?: string;
+      };
+      if (!response.ok || !result.session) {
+        setError(result.error ?? "Answer could not be submitted.");
+        return false;
+      }
+      setSession(result.session);
+      return true;
+    } catch {
+      setError("Answer could not be submitted. Check your connection.");
+      return false;
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function submitAnswer(
     event: FormEvent<HTMLFormElement>,
   ): Promise<void> {
     event.preventDefault();
-    if (!answer.trim()) {
-      setError("Answer cannot be empty.");
-      return;
-    }
-    setError("");
-    setSubmitting(true);
-    const response = await fetch(
-      `${apiBaseUrl}/api/interview-sessions/${sessionId}/answers`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ answer }),
-      },
-    );
-    const result = (await response.json()) as {
-      session?: Session;
-      error?: string;
-    };
-    setSubmitting(false);
-    if (!response.ok || !result.session) {
-      setError(result.error ?? "Answer could not be submitted.");
-      return;
-    }
-    setSession(result.session);
-    setAnswer("");
+    if (await submitAnswerText(answer)) setAnswer("");
+  }
+
+  async function submitVoiceResponse(): Promise<void> {
+    if (await submitAnswerText(voice.transcript)) voice.clearTranscript();
   }
 
   async function terminate(): Promise<void> {
@@ -349,12 +377,6 @@ export function ActiveInterview({
           </div>
         )}
 
-        {session.lastTurnAnalysis && (
-          <div className="question-panel">
-            <p className="eyebrow">Latest analysis</p>
-            <p>{session.lastTurnAnalysis.analysisNotes}</p>
-          </div>
-        )}
         {error && <p className="error">{error}</p>}
       </section>
     );
@@ -375,18 +397,27 @@ export function ActiveInterview({
         {session.expectedScore != null && (
           <p className="note">Expected score: {session.expectedScore}</p>
         )}
-        {session.lastTurnAnalysis && (
-          <div className="question-panel">
-            <p className="eyebrow">Latest analysis</p>
-            <p>{session.lastTurnAnalysis.analysisNotes}</p>
-          </div>
-        )}
         {error && <p className="error">{error}</p>}
       </section>
     );
   }
 
-  const analysis = session.lastTurnAnalysis;
+  const questionPanel = (
+    <div
+      className={
+        session.pendingFollowUpQuestion
+          ? "question-panel is-follow-up"
+          : "question-panel"
+      }
+    >
+      <p className="eyebrow">
+        {session.pendingFollowUpQuestion
+          ? "Follow-up — from your previous response"
+          : "Current question"}
+      </p>
+      <p>{session.currentQuestion}</p>
+    </div>
+  );
 
   return (
     <section
@@ -396,152 +427,76 @@ export function ActiveInterview({
       <div className="sheet">
         <div className="session-header">
           <div>
-            <p className="eyebrow">Interview workspace / live</p>
+            <p className="eyebrow">
+              Interview workspace / {voiceMode && !textFallback ? "voice" : "text"}
+            </p>
             <h2 id="active-interview-heading">{session.topic}</h2>
           </div>
           <span className="status numeral">{session.duration} min session</span>
         </div>
-        <ol className="interview-thread" aria-label="Interview progression">
-          <li className="is-active">
-            <span>01</span>
-            <strong>Question</strong>
-          </li>
-          <li>
-            <span>02</span>
-            <strong>Response</strong>
-          </li>
-          <li>
-            <span>03</span>
-            <strong>Analysis</strong>
-          </li>
-          <li>
-            <span>04</span>
-            <strong>Next move</strong>
-          </li>
-        </ol>
       </div>
       <p className="session-context">
         {session.interviewType} · {session.difficulty} · {session.language} ·
         Question {session.turnCount + 1}
       </p>
-      <div
-        className={
-          session.pendingFollowUpQuestion
-            ? "question-panel is-follow-up"
-            : "question-panel"
-        }
-      >
-        <p className="eyebrow">
-          {session.pendingFollowUpQuestion
-            ? "Follow-up — from your previous response"
-            : "Current question"}
-        </p>
-        <p>{session.currentQuestion}</p>
-      </div>
-      <form className="sheet answer-form" onSubmit={submitAnswer}>
-        <label>
-          Your response
-          <textarea
-            value={answer}
-            onChange={(event) => setAnswer(event.target.value)}
-            placeholder="Write your answer here"
-            rows={7}
-            disabled={submitting}
-          />
-        </label>
-        <div className="configuration-actions">
-          <button type="submit" disabled={submitting}>
-            {submitting ? "Submitting..." : "Submit answer"}
-          </button>
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={terminate}
-          >
-            End interview
-          </button>
-        </div>
-        {submitting && (
-          <p className="status" role="status">
-            Checking answer quality...
-          </p>
-        )}
-        {error && (
-          <p className="error" role="alert">
-            {error}
-          </p>
-        )}
-      </form>
 
-      {session.lastTurnAnalysisStatus === "completed" && analysis && (
-        <div className="question-panel" aria-live="polite">
-          <p className="eyebrow">Answer analysis</p>
-          <span className={`category-tag ${analysis.category}`}>
-            {analysis.category}
-          </span>
-          <p style={{ marginTop: 10 }}>{analysis.analysisNotes}</p>
-          <ul>
-            <li>
-              <strong>Technical correctness:</strong>{" "}
-              {analysis.technicalCorrectness.assessment}
-            </li>
-            <li>
-              <strong>Relevance:</strong> {analysis.relevance.assessment}
-            </li>
-            <li>
-              <strong>Completeness:</strong> {analysis.completeness.assessment}
-            </li>
-            <li>
-              <strong>Explanation quality:</strong>{" "}
-              {analysis.explanationQuality.assessment}
-            </li>
-            <li>
-              <strong>Reasoning:</strong> {analysis.reasoning.assessment}
-            </li>
-          </ul>
-          {analysis.strengths.length > 0 && (
-            <div>
-              <p>
-                <strong>Strengths</strong>
-              </p>
-              <ul>
-                {analysis.strengths.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {analysis.missingImportantPoints.length > 0 && (
-            <div>
-              <p>
-                <strong>Missing important points</strong>
-              </p>
-              <ul>
-                {analysis.missingImportantPoints.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {analysis.improvementOpportunities.length > 0 && (
-            <div>
-              <p>
-                <strong>Improvement opportunities</strong>
-              </p>
-              <ul>
-                {analysis.improvementOpportunities.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
       )}
 
-      {session.lastTurnAnalysisStatus === "failed" && (
-        <p className="error" role="alert">
-          Your answer was saved, but analysis is temporarily unavailable.
-        </p>
+      {voiceMode && !textFallback ? (
+        <VoiceWorkspace
+          voice={voice}
+          question={session.currentQuestion}
+          isFollowUp={Boolean(session.pendingFollowUpQuestion)}
+          language={session.language}
+          busy={submitting}
+          onSubmit={() => void submitVoiceResponse()}
+          onEnd={() => void terminate()}
+          onUseText={() => setTextFallback(true)}
+        />
+      ) : (
+        <>
+          {voiceMode && (
+            <p className="voice-text-mode-note">
+              <span>You are answering by typing. This is a voice interview.</span>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setTextFallback(false)}
+              >
+                Try voice again
+              </button>
+            </p>
+          )}
+          {questionPanel}
+          <form className="sheet answer-form" onSubmit={submitAnswer}>
+            <label>
+              Your response
+              <textarea
+                value={answer}
+                onChange={(event) => setAnswer(event.target.value)}
+                placeholder="Write your answer here"
+                rows={7}
+                disabled={submitting}
+              />
+            </label>
+            <div className="configuration-actions">
+              <button type="submit" disabled={submitting}>
+                {submitting ? "Submitting..." : "Submit answer"}
+              </button>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={terminate}
+              >
+                End interview
+              </button>
+            </div>
+          </form>
+        </>
       )}
     </section>
   );
