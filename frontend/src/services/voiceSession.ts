@@ -5,6 +5,7 @@ import type {
   VoiceStateSnapshot,
 } from "@/types/voice";
 import { createMicrophoneCapture } from "./microphone";
+import { createAudioPlayback } from "./audioPlayback";
 
 export interface VoiceSessionOptions {
   url: string;
@@ -14,9 +15,6 @@ export interface VoiceSessionOptions {
   onError?: (code: VoiceErrorCode, message: string) => void;
 }
 
-// Voice socket lives on the same host as the API. If VITE_API_BASE_URL is
-// set, derive ws(s)://<api host>/voice from it; otherwise fall back to the
-// page's own host (only works when a dev/prod proxy forwards /voice).
 export function buildVoiceUrl(
   apiBaseUrl: string,
   location: { protocol: string; host: string } = window.location,
@@ -26,6 +24,7 @@ export function buildVoiceUrl(
     const protocol = api.protocol === "https:" ? "wss:" : "ws:";
     return `${protocol}//${api.host}/voice`;
   }
+
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${location.host}/voice`;
 }
@@ -34,6 +33,7 @@ export function createVoiceSession(
   options: VoiceSessionOptions,
 ): VoiceSession {
   const microphone = createMicrophoneCapture();
+  const audioPlayback = createAudioPlayback();
 
   let socket: WebSocket | null = null;
   let state: VoiceState = "idle";
@@ -70,11 +70,12 @@ export function createVoiceSession(
 
       await new Promise<void>((resolve, reject) => {
         const separator = options.url.includes("?") ? "&" : "?";
-        socket = new WebSocket(`${options.url}${separator}sessionId=${encodeURIComponent(options.sessionId)}`);
+
+        socket = new WebSocket(
+          `${options.url}${separator}sessionId=${encodeURIComponent(options.sessionId)}`,
+        );
 
         socket.onopen = () => {
-          // Connected is not the same as listening: the microphone is only
-          // opened by startListening(), so report "idle" (ready) here.
           updateState("idle");
           resolve();
         };
@@ -85,10 +86,12 @@ export function createVoiceSession(
             "CONNECTION_FAILED",
             "Voice connection failed.",
           );
+
           options.onError?.(
             "CONNECTION_FAILED",
             "Voice connection failed.",
           );
+
           reject(new Error("Voice connection failed"));
         };
 
@@ -102,7 +105,9 @@ export function createVoiceSession(
           try {
             const message = JSON.parse(event.data);
 
-            if (message.type === "state") {
+            if (message.type === "audio") {
+              void audioPlayback.enqueue(message.audio);
+            } else if (message.type === "state") {
               updateState(message.state);
             } else if (message.type === "transcription") {
               options.onTranscript?.(
@@ -115,8 +120,13 @@ export function createVoiceSession(
                 message.code,
                 message.message,
               );
-              options.onError?.(message.code, message.message);
+
+              options.onError?.(
+                message.code,
+                message.message,
+              );
             } else if (message.type === "interrupted") {
+              audioPlayback.stop();
               updateState("interrupted");
             }
           } catch {
@@ -132,8 +142,12 @@ export function createVoiceSession(
 
     async disconnect() {
       microphone.stop();
+      audioPlayback.stop();
+      await audioPlayback.close();
+
       socket?.close();
       socket = null;
+
       updateState("disconnected");
     },
 
@@ -158,6 +172,7 @@ export function createVoiceSession(
 
     async interrupt() {
       microphone.stop();
+      audioPlayback.stop();
 
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "interrupt" }));

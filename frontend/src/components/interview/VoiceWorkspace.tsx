@@ -14,11 +14,8 @@ interface VoiceWorkspaceProps {
   busy: boolean;
   onSubmit: () => void;
   onEnd: () => void;
-  onUseText: () => void;
 }
 
-// Voice-first interview surface. It renders only what the voice session
-// actually reports: no simulated speech, no fake waveform activity.
 export function VoiceWorkspace({
   voice,
   question,
@@ -27,24 +24,43 @@ export function VoiceWorkspace({
   busy,
   onSubmit,
   onEnd,
-  onUseText,
 }: VoiceWorkspaceProps): ReactElement {
   const [confirmingEnd, setConfirmingEnd] = useState(false);
-  const { state, connected, transcript, interimTranscript, error } = voice;
+
+  const {
+    state,
+    connected,
+    transcript,
+    interimTranscript,
+    error,
+  } = voice;
 
   const view = describeVoiceState(state, connected);
   const micAction = getMicAction(state, connected, busy);
-  const canSubmit = canSubmitVoiceResponse(state, transcript, busy);
-  const voiceDown = state === "error" || state === "disconnected";
+  const canSubmit = canSubmitVoiceResponse(
+    state,
+    transcript,
+    busy,
+  );
 
-  function handleMicClick() {
-    if (micAction === "start") void voice.startListening();
-    else if (micAction === "stop") void voice.stopListening();
+  const voiceDown =
+    state === "error" ||
+    state === "disconnected";
+
+  function handleMicClick(): void {
+    if (micAction === "start") {
+      void voice.startListening();
+    } else if (micAction === "stop") {
+      void voice.stopListening();
+    }
   }
 
   return (
     <div className="voice-interview-workspace">
-      <section className="voice-question-panel" aria-label="Interviewer">
+      <section
+        className="voice-question-panel"
+        aria-label="Interviewer"
+      >
         <div className="voice-panel-label">
           {isFollowUp ? "FOLLOW-UP QUESTION" : "CURRENT QUESTION"}
         </div>
@@ -53,10 +69,16 @@ export function VoiceWorkspace({
           <div className="voice-avatar">
             <span>IR</span>
           </div>
+
           <div>
-            <span className="voice-role">I-RIS Interviewer</span>
+            <span className="voice-role">
+              I-RIS Interviewer
+            </span>
+
             <span
-              className={`voice-state ${state === "speaking" ? "is-speaking" : ""}`}
+              className={`voice-state ${
+                state === "speaking" ? "is-speaking" : ""
+              }`}
               aria-live="polite"
             >
               {view.label}
@@ -69,14 +91,28 @@ export function VoiceWorkspace({
         </div>
 
         {state === "speaking" && (
-          <div className="voice-speaking-bars" aria-hidden="true">
-            <span /><span /><span /><span /><span /><span /><span />
+          <div
+            className="voice-speaking-bars"
+            aria-hidden="true"
+          >
+            <span />
+            <span />
+            <span />
+            <span />
+            <span />
+            <span />
+            <span />
           </div>
         )}
       </section>
 
-      <section className="voice-response-panel" aria-label="Your response">
-        <div className="voice-panel-label">YOUR RESPONSE · {language.toUpperCase()}</div>
+      <section
+        className="voice-response-panel"
+        aria-label="Your response"
+      >
+        <div className="voice-panel-label">
+          YOUR RESPONSE ? {language.toUpperCase()}
+        </div>
 
         <button
           type="button"
@@ -91,23 +127,40 @@ export function VoiceWorkspace({
           disabled={micAction === "none"}
           aria-pressed={state === "listening"}
           aria-label={
-            micAction === "stop" ? "Stop speaking" : "Start speaking"
+            micAction === "stop"
+              ? "Stop speaking"
+              : "Start speaking"
           }
         >
-          <span className="voice-mic-icon" aria-hidden="true">🎙</span>
+          <span
+            className="voice-mic-icon"
+            aria-hidden="true"
+          >
+            ??
+          </span>
         </button>
 
         <h2>{view.label}</h2>
-        <p className="muted voice-help">{view.hint}</p>
 
-        <div className="voice-transcript" aria-live="polite">
+        <p className="muted voice-help">
+          {view.hint}
+        </p>
+
+        <div
+          className="voice-transcript"
+          aria-live="polite"
+        >
           <span className="voice-transcript-label">
-            {state === "listening" ? "Live transcription" : "Transcription"}
+            {state === "listening"
+              ? "Live transcription"
+              : "Transcription"}
           </span>
+
           <p>
             {transcript || interimTranscript ? (
               <>
                 {transcript}
+
                 {interimTranscript && (
                   <span className="voice-interim">
                     {transcript ? " " : ""}
@@ -122,27 +175,38 @@ export function VoiceWorkspace({
         </div>
 
         {error && (
-          <div className="voice-error" role="alert">
+          <div
+            className="voice-error"
+            role="alert"
+          >
             <strong>Voice issue</strong>
             <span>{error}</span>
           </div>
         )}
 
         <div className="voice-controls">
-          <button type="button" onClick={onSubmit} disabled={!canSubmit}>
-            {busy ? "Submitting..." : "Submit response"}
+          <button
+            type="button"
+            onClick={onSubmit}
+            disabled={!canSubmit}
+          >
+            {busy
+              ? "Submitting..."
+              : "Submit response"}
           </button>
 
-          {transcript && state !== "listening" && state !== "processing" && (
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={voice.clearTranscript}
-              disabled={busy}
-            >
-              Clear and re-record
-            </button>
-          )}
+          {transcript &&
+            state !== "listening" &&
+            state !== "processing" && (
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={voice.clearTranscript}
+                disabled={busy}
+              >
+                Clear and re-record
+              </button>
+            )}
 
           {state === "speaking" && (
             <button
@@ -166,18 +230,10 @@ export function VoiceWorkspace({
         </div>
 
         <div className="voice-secondary-actions">
-          <button
-            type="button"
-            className="voice-text-fallback"
-            onClick={onUseText}
-            disabled={busy || state === "listening"}
-          >
-            Answer by typing instead
-          </button>
-
           {confirmingEnd ? (
             <span className="voice-end-confirm">
               End interview and go to the closing?{" "}
+
               <button
                 type="button"
                 className="voice-end-button"
@@ -186,6 +242,7 @@ export function VoiceWorkspace({
               >
                 Yes, end
               </button>{" "}
+
               <button
                 type="button"
                 className="voice-text-fallback"

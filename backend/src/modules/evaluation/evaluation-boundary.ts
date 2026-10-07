@@ -3,7 +3,7 @@ import type { AnswerAnalysis } from "../ai/ai-provider.js";
 export type EvaluationEvidenceTurn = {
   question: string;
   answer: string;
-  analysis: AnswerAnalysis | null;
+  analysis?: AnswerAnalysis | null;
 };
 
 export type EvaluationResult = {
@@ -31,11 +31,55 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum);
 }
 
+function scoreAnswer(question: string, answer: string): number {
+  const normalizedQuestion = question.trim().toLowerCase();
+  const normalizedAnswer = answer.trim();
+
+  if (!normalizedAnswer) return 0;
+
+  const words = normalizedAnswer.split(/\s+/).filter(Boolean).length;
+
+  let score = 35;
+
+  if (words >= 8) score += 10;
+  if (words >= 20) score += 10;
+  if (words >= 40) score += 10;
+
+  if (normalizedQuestion.length > 0) {
+    const questionWords = new Set(
+      normalizedQuestion
+        .split(/[^a-z0-9+#.]+/)
+        .map((word) => word.trim())
+        .filter((word) => word.length >= 4),
+    );
+
+    const answerWords = new Set(
+      normalizedAnswer
+        .toLowerCase()
+        .split(/[^a-z0-9+#.]+/)
+        .map((word) => word.trim())
+        .filter((word) => word.length >= 4),
+    );
+
+    let relevantWords = 0;
+    for (const word of questionWords) {
+      if (answerWords.has(word)) relevantWords += 1;
+    }
+
+    if (relevantWords > 0) score += 10;
+    if (relevantWords >= 2) score += 10;
+  }
+
+  if (/[.!?]/.test(normalizedAnswer)) score += 5;
+
+  return clamp(score, 0, 100);
+}
+
 export function createEvaluationBoundary(): EvaluationBoundary {
   return {
     evaluate: ({ sessionId, topic, turns }) => {
       const normalizedTurns = turns.filter(
-        (turn) => turn.answer.trim().length > 0 || turn.analysis,
+        (turn) => turn.answer.trim().length > 0,
       );
 
       if (normalizedTurns.length === 0) {
@@ -57,103 +101,74 @@ export function createEvaluationBoundary(): EvaluationBoundary {
         };
       }
 
-      const categoryWeight: Record<string, number> = {
-        strong: 90,
-        partial: 65,
-        weak: 35,
-        irrelevant: 18,
-        unclear: 12,
-      };
+      const scores = normalizedTurns.map((turn) =>
+        scoreAnswer(turn.question, turn.answer),
+      );
 
-      let scoreTotal = 0;
+      const actualScore = clamp(
+        Math.round(scores.reduce((total, score) => total + score, 0) / scores.length),
+        0,
+        100,
+      );
+
       const strengths = new Set<string>();
       const weaknesses = new Set<string>();
       const improvementAreas = new Set<string>();
       const recommendations = new Set<string>();
 
-      for (const turn of normalizedTurns) {
-        const analysis = turn.analysis;
-        if (!analysis) continue;
+      const averageWords =
+        normalizedTurns.reduce(
+          (total, turn) =>
+            total +
+            turn.answer.trim().split(/\s+/).filter(Boolean).length,
+          0,
+        ) / normalizedTurns.length;
 
-        scoreTotal += categoryWeight[analysis.category] ?? 40;
+      strengths.add("The candidate completed and attempted the captured interview questions.");
 
-        for (const strength of analysis.strengths) {
-          if (strength.trim()) strengths.add(strength.trim());
-        }
-        for (const missing of analysis.missingImportantPoints) {
-          if (missing.trim()) weaknesses.add(missing.trim());
-        }
-        for (const opportunity of analysis.improvementOpportunities) {
-          if (opportunity.trim()) improvementAreas.add(opportunity.trim());
-        }
-
-        if (analysis.category === "weak" || analysis.category === "partial") {
-          recommendations.add(
-            "Give more precise explanations and include a concrete example for each concept.",
-          );
-        }
-        if (
-          analysis.category === "irrelevant" ||
-          analysis.category === "unclear"
-        ) {
-          recommendations.add(
-            "Revisit the core question and answer directly with the relevant technical concept.",
-          );
-        }
-        if (analysis.category === "strong") {
-          recommendations.add(
-            "Keep using structured reasoning and practical examples to maintain consistency.",
-          );
-        }
+      if (actualScore >= 70) {
+        strengths.add("Answers were generally relevant and sufficiently detailed.");
+        recommendations.add(
+          "Keep using structured reasoning and practical examples.",
+        );
+      } else {
+        weaknesses.add("Some answers need more depth and precision.");
+        improvementAreas.add(
+          "Explain concepts with clearer reasoning and concrete examples.",
+        );
+        recommendations.add(
+          "Give direct answers first, then support them with reasoning or examples.",
+        );
       }
 
-      const averageScore = Math.round(scoreTotal / normalizedTurns.length);
-      const actualScore = clamp(averageScore, 0, 100);
+      if (averageWords < 8) {
+        weaknesses.add("Several answers were too brief to demonstrate full understanding.");
+        improvementAreas.add(
+          "Expand short answers with explanation, reasoning, and examples.",
+        );
+      } else if (averageWords >= 30) {
+        strengths.add("Answers contained enough detail to demonstrate reasoning.");
+      }
+
       const generatedAt = new Date().toISOString();
-
-      const generatedStrengths = Array.from(strengths).slice(0, 4);
-      const generatedWeaknesses = Array.from(weaknesses).slice(0, 4);
-      const generatedImprovementAreas = Array.from(improvementAreas).slice(
-        0,
-        4,
-      );
-      const generatedRecommendations = Array.from(recommendations).slice(0, 3);
-
-      let overallAssessment =
-        "The candidate demonstrated a reasonable understanding of the interview topic with some areas to strengthen.";
-      if (actualScore >= 80) {
-        overallAssessment =
-          "The candidate provided a strong, relevant set of answers with clear technical reasoning and practical examples.";
-      } else if (actualScore >= 50) {
-        overallAssessment =
-          "The candidate showed useful understanding and relevant thinking, but a few answers would benefit from deeper detail and stronger structure.";
-      } else if (actualScore >= 25) {
-        overallAssessment =
-          "The candidate showed some relevant awareness, but the interview evidence suggests incomplete understanding and limited depth.";
-      }
 
       return {
         actualScore,
-        overallAssessment,
-        strengths:
-          generatedStrengths.length > 0
-            ? generatedStrengths
-            : ["Consistent participation in the interview."],
-        weaknesses:
-          generatedWeaknesses.length > 0
-            ? generatedWeaknesses
-            : ["No major weaknesses were evident in the captured evidence."],
-        improvementAreas:
-          generatedImprovementAreas.length > 0
-            ? generatedImprovementAreas
-            : ["Add more depth and structure to future answers."],
-        actionableRecommendations:
-          generatedRecommendations.length > 0
-            ? generatedRecommendations
-            : ["Use examples and reasoning to answer more concretely."],
-        evidenceSummary: `Evaluation for ${topic} used ${normalizedTurns.length} captured answer(s) and their stored analysis evidence.`,
+        overallAssessment:
+          actualScore >= 80
+            ? "The candidate demonstrated strong understanding with relevant and reasonably detailed answers."
+            : actualScore >= 60
+              ? "The candidate demonstrated a useful understanding of the topic, with some areas that need deeper explanation."
+              : "The candidate showed some relevant understanding, but the captured answers need more depth, precision, and structure.",
+        strengths: Array.from(strengths).slice(0, 4),
+        weaknesses: Array.from(weaknesses).slice(0, 4),
+        improvementAreas: Array.from(improvementAreas).slice(0, 4),
+        actionableRecommendations: Array.from(recommendations).slice(0, 3),
+        evidenceSummary: `Evaluation for ${topic} used ${normalizedTurns.length} captured answer(s) from the completed interview.`,
         generatedAt,
       };
     },
   };
 }
+
+

@@ -33,7 +33,6 @@ export type SessionConfiguration = {
   mode: string;
 };
 
-export type AnalysisStatus = "pending" | "completed" | "failed";
 
 export type SessionSnapshot = SessionConfiguration & {
   id: string;
@@ -44,8 +43,6 @@ export type SessionSnapshot = SessionConfiguration & {
   questionIndex: number;
   turnCount: number;
   expectedScore: number | null;
-  lastTurnAnalysisStatus: AnalysisStatus | null;
-  lastTurnAnalysis: AnswerAnalysis | null;
   startedAt: string;
   completedAt: string | null;
 };
@@ -106,13 +103,11 @@ export class SessionEngine {
         "Only Text and Voice modes are supported.",
       );
     }
-    if (
-      !Number.isInteger(configuration.duration) ||
-      configuration.duration <= 0
-    ) {
+    const allowedDurations = [5, 10, 15, 20, 30];
+    if (!allowedDurations.includes(configuration.duration)) {
       throw new SessionEngineError(
         "INVALID_DURATION",
-        "Session duration must be a positive number of minutes.",
+        "Session duration must be one of 5, 10, 15, 20, or 30 minutes.",
       );
     }
 
@@ -173,19 +168,6 @@ export class SessionEngine {
         ? String(row.pending_follow_up_question)
         : null;
 
-    const latestTurn = firstRow(
-      this.database,
-      "SELECT analysis_status, analysis_json FROM interview_turns WHERE interview_session_id = ? ORDER BY turn_number DESC LIMIT 1",
-      [sessionId],
-    );
-    const lastTurnAnalysisStatus =
-      latestTurn && latestTurn.analysis_status
-        ? String(latestTurn.analysis_status)
-        : null;
-    const lastTurnAnalysis =
-      latestTurn && latestTurn.analysis_json
-        ? (JSON.parse(String(latestTurn.analysis_json)) as AnswerAnalysis)
-        : null;
 
     return {
       id: String(row.id),
@@ -200,16 +182,13 @@ export class SessionEngine {
       currentQuestion:
         state === "active"
           ? (pendingFollowUpQuestion ??
-            this.questions.getQuestion(plannedQuestionIndex) ??
-            null)
+            this.questions.getQuestion(plannedQuestionIndex))
           : null,
       pendingFollowUpQuestion,
       questionIndex: turnCount,
       turnCount,
       expectedScore:
         row.expected_score != null ? Number(row.expected_score) : null,
-      lastTurnAnalysisStatus: lastTurnAnalysisStatus as AnalysisStatus | null,
-      lastTurnAnalysis,
       startedAt: String(row.started_at),
       completedAt: row.completed_at ? String(row.completed_at) : null,
     };
@@ -237,9 +216,7 @@ export class SessionEngine {
     const isFollowUpAnswer = session.pendingFollowUpQuestion !== null;
     const questionToPersist = session.currentQuestion ?? null;
     this.database.run(
-      `INSERT INTO interview_turns
-        (id, interview_session_id, turn_number, question, answer, analysis_status, analysis_json, analysis_error, created_at)
-       VALUES (?, ?, ?, ?, ?, 'pending', NULL, NULL, ?)`,
+      `INSERT INTO interview_turns (id, interview_session_id, turn_number, question, answer, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
       [
         turnId,
         sessionId,
@@ -270,10 +247,6 @@ const analysis = await this.aiProvider.analyzeAnswer({
         mode: session.mode,
       });
 this.validateAnalysis(analysis);
-      this.database.run(
-        "UPDATE interview_turns SET analysis_status = 'completed', analysis_json = ?, analysis_error = NULL WHERE id = ?",
-        [JSON.stringify(analysis), turnId],
-      );
 
       if (!isFollowUpAnswer) {
         try {
@@ -323,13 +296,6 @@ this.validateFollowUpDecision(followUpDecision);
         );
       }
     } catch (error) {
-      this.database.run(
-        "UPDATE interview_turns SET analysis_status = 'failed', analysis_error = ? WHERE id = ?",
-        [
-          error instanceof Error ? error.message : "Answer analysis failed.",
-          turnId,
-        ],
-      );
       if (!isFollowUpAnswer) {
         plannedQuestionIndex += 1;
         this.database.run(
@@ -345,12 +311,6 @@ this.validateFollowUpDecision(followUpDecision);
       }
     }
 
-    if (plannedQuestionIndex >= this.questions.count) {
-      this.database.run(
-        "UPDATE interview_sessions SET status = 'closing' WHERE id = ? AND status = 'active'",
-        [sessionId],
-      );
-    }
     return this.get(accountId, sessionId);
   }
 
@@ -420,7 +380,7 @@ this.validateFollowUpDecision(followUpDecision);
     }
 
     const rows = this.database.exec(
-      "SELECT question, answer, analysis_json FROM interview_turns WHERE interview_session_id = ? ORDER BY turn_number",
+      "SELECT question, answer FROM interview_turns WHERE interview_session_id = ? ORDER BY turn_number",
       [sessionId],
     );
     const values = rows[0]?.values ?? [];
@@ -581,3 +541,6 @@ export function createSessionEngine(database: Database, config?: AppConfig): Ses
 
   return new SessionEngine(database, undefined, undefined, aiProvider);
 }
+
+
+

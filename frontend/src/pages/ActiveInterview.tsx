@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Card } from "@/components/common/Card";
 import { Button } from "@/components/common/Button";
@@ -85,7 +85,7 @@ export function ActiveInterview() {
 
     const sessionInstance = createVoiceSession({
       url: `${protocol}://${window.location.host}/voice`,
-      interviewSessionId,
+      sessionId,
 
       onStateChange: (snapshot: VoiceStateSnapshot) => {
         setVoiceState(snapshot.state);
@@ -167,7 +167,7 @@ export function ActiveInterview() {
     if (!answer.trim()) return;
 
     await withBusy(async () => {
-      const updated = await interviewService.submitAnswer(interviewSessionId, {
+      const updated = await interviewService.submitAnswer(sessionId!, {
         answer,
       });
 
@@ -260,7 +260,7 @@ export function ActiveInterview() {
   async function handleExpectedScore() {
     await withBusy(async () => {
       const updated = await interviewService.submitExpectedScore(
-        interviewSessionId,
+        sessionId!,
         {
           expectedScore,
         },
@@ -310,7 +310,7 @@ export function ActiveInterview() {
           <h1>{session.topic}</h1>
 
           <p className="muted">
-            {session.interviewType} · {session.difficulty} ·{" "}
+            {session.interviewType} � {session.difficulty} �{" "}
             {session.language}
           </p>
         </div>
@@ -411,7 +411,7 @@ export function ActiveInterview() {
                         : "Start speaking"
                     }
                   >
-                    <span className="voice-mic-icon">🎙</span>
+                    <span className="voice-mic-icon">??</span>
                   </button>
 
                   <div className="voice-mic-title">
@@ -602,4 +602,6 @@ export function ActiveInterview() {
     </div>
   );
 }
+
+
 

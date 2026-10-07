@@ -12,6 +12,8 @@ export type AppConfig = {
   sttApiKey?: string;
   sttModel?: string;
   sttLanguage?: string;
+  geminiApiKey?: string;
+  geminiModel?: string;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -27,5 +29,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     sttApiKey: env.STT_API_KEY ?? "",
     sttModel: env.STT_MODEL ?? "whisper-large-v3-turbo",
     sttLanguage: env.STT_LANGUAGE ?? "en",
+    geminiApiKey: env.GEMINI_API_KEY ?? "",
+    geminiModel: env.GEMINI_MODEL ?? "gemini-3.1-flash-live-preview",
   };
 }

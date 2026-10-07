@@ -156,7 +156,7 @@ describe("Interview Session Engine", () => {
     const engine = new SessionEngine(database, undefined, () => current);
     const session = engine.start("account-1", {
       ...configuration,
-      duration: 1,
+      duration: 5,
     });
 
     current = new Date(current.getTime() + 60_001);
@@ -216,9 +216,6 @@ describe("Interview Session Engine", () => {
       session.id,
       "A solid answer with a practical example and reasoning.",
     );
-
-    expect(next.lastTurnAnalysisStatus).toBe("completed");
-    expect(next.lastTurnAnalysis?.category).toBe("strong");
     expect(next.currentQuestion).toContain("practical example");
     expect(
       database.exec(
@@ -327,7 +324,6 @@ describe("Interview Session Engine", () => {
 
     expect(next.pendingFollowUpQuestion).toBeNull();
     expect(next.currentQuestion).toContain("practical example");
-    expect(next.lastTurnAnalysisStatus).toBe("completed");
     expect(
       database.exec("SELECT COUNT(*) FROM interview_turns")[0]?.values[0]?.[0],
     ).toBe(1);
@@ -365,7 +361,6 @@ describe("Interview Session Engine", () => {
 
     expect(next.state).toBe("active");
     expect(next.currentQuestion).toContain("practical example");
-    expect(next.lastTurnAnalysisStatus).toBe("failed");
 
     expect(
       database.exec(
@@ -418,7 +413,6 @@ describe("Interview Session Engine", () => {
     expect(next.state).toBe("active");
     expect(next.pendingFollowUpQuestion).toBeNull();
     expect(next.currentQuestion).toContain("practical example");
-    expect(next.lastTurnAnalysisStatus).toBe("completed");
 
     expect(
       database.exec(
@@ -455,7 +449,6 @@ describe("Interview Session Engine", () => {
     );
 
     expect(next.state).toBe("active");
-    expect(next.lastTurnAnalysisStatus).toBe("failed");
     expect(
       database.exec("SELECT COUNT(*) FROM interview_turns")[0]?.values[0]?.[0],
     ).toBe(1);
@@ -481,7 +474,7 @@ describe("Interview Session Engine", () => {
     const engine = new SessionEngine(database, undefined, () => current);
     const session = engine.start("account-1", {
       ...configuration,
-      duration: 1,
+      duration: 5,
     });
 
     current = new Date(current.getTime() + 60_001);
@@ -694,6 +687,8 @@ describe("Interview Session Engine", () => {
     expect(session.currentQuestion).toBeTruthy();
   });
 });
+
+
 
 
 

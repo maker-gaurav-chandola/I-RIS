@@ -17,6 +17,8 @@ describe("configuration", () => {
       sttApiKey: "",
       sttModel: "whisper-large-v3-turbo",
       sttLanguage: "en",
+      geminiApiKey: "",
+      geminiModel: "gemini-3.1-flash-live-preview",
     });
   });
 
@@ -33,6 +35,8 @@ describe("configuration", () => {
       STT_API_KEY: "test-groq-key",
       STT_MODEL: "whisper-large-v3",
       STT_LANGUAGE: "hi",
+      GEMINI_API_KEY: "test-gemini-key",
+      GEMINI_MODEL: "test-gemini-live-model",
     });
 
     expect(config).toEqual({
@@ -47,6 +51,8 @@ describe("configuration", () => {
       sttApiKey: "test-groq-key",
       sttModel: "whisper-large-v3",
       sttLanguage: "hi",
+      geminiApiKey: "test-gemini-key",
+      geminiModel: "test-gemini-live-model",
     });
   });
 

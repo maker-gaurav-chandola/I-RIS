@@ -1,33 +1,7 @@
-import { useEffect, useState, type FormEvent, type ReactElement } from "react";
+import { useEffect, useState, type ReactElement } from "react";
 import { VoiceWorkspace } from "./interview/VoiceWorkspace";
 import { useVoiceInterview } from "@/hooks/useVoiceInterview";
 import { buildVoiceUrl } from "@/services/voiceSession";
-import { isVoiceMode } from "@/services/interviewMode";
-
-type AnalysisCategory =
-  | "strong"
-  | "partial"
-  | "weak"
-  | "irrelevant"
-  | "unclear";
-
-type AnalysisBlock = {
-  assessment: string;
-  uncertain: boolean;
-};
-
-type SessionAnalysis = {
-  category: AnalysisCategory;
-  technicalCorrectness: AnalysisBlock;
-  relevance: AnalysisBlock;
-  completeness: AnalysisBlock;
-  explanationQuality: AnalysisBlock;
-  reasoning: AnalysisBlock;
-  strengths: string[];
-  missingImportantPoints: string[];
-  improvementOpportunities: string[];
-  analysisNotes: string;
-};
 
 type Session = {
   id: string;
@@ -42,8 +16,6 @@ type Session = {
   pendingFollowUpQuestion: string | null;
   turnCount: number;
   expectedScore: number | null;
-  lastTurnAnalysisStatus: "pending" | "completed" | "failed" | null;
-  lastTurnAnalysis: SessionAnalysis | null;
 };
 
 type EvaluationResult = {
@@ -67,7 +39,6 @@ export function ActiveInterview({
   sessionId,
 }: ActiveInterviewProps): ReactElement {
   const [session, setSession] = useState<Session | null>(null);
-  const [answer, setAnswer] = useState("");
   const [closingScore, setClosingScore] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -75,45 +46,52 @@ export function ActiveInterview({
   const [submittingScore, setSubmittingScore] = useState(false);
   const [evaluation, setEvaluation] = useState<EvaluationResult | null>(null);
   const [loadingResults, setLoadingResults] = useState(false);
-  // Voice is the primary mode; this only flips when the candidate (or a
-  // voice failure) sends them to the text fallback.
-  const [textFallback, setTextFallback] = useState(false);
 
-  const voiceMode = session != null && isVoiceMode(session.mode);
   const voice = useVoiceInterview({
-    enabled: voiceMode && session?.state === "active" && !textFallback,
+    enabled: session?.state === "active",
     sessionId,
     voiceUrl: buildVoiceUrl(apiBaseUrl),
   });
 
   async function loadSession(): Promise<void> {
-    const response = await fetch(
-      `${apiBaseUrl}/api/interview-sessions/${sessionId}`,
-      { credentials: "include" },
-    );
-    const result = (await response.json()) as {
-      session?: Session;
-      error?: string;
-    };
-    if (!response.ok || !result.session) {
-      setError(result.error ?? "Interview session could not be loaded.");
-    } else {
-      setSession(result.session);
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/api/interview-sessions/${sessionId}`,
+        { credentials: "include" },
+      );
+
+      const result = (await response.json()) as {
+        session?: Session;
+        error?: string;
+      };
+
+      if (!response.ok || !result.session) {
+        setError(result.error ?? "Interview session could not be loaded.");
+      } else {
+        setSession(result.session);
+      }
+    } catch {
+      setError("Interview session could not be loaded. Check your connection.");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   useEffect(() => {
     void loadSession();
   }, [sessionId]);
 
-  async function submitAnswerText(text: string): Promise<boolean> {
-    if (!text.trim()) {
-      setError("Answer cannot be empty.");
-      return false;
+  async function submitVoiceResponse(): Promise<void> {
+    const text = voice.transcript.trim();
+
+    if (!text) {
+      setError("Speak an answer before submitting.");
+      return;
     }
+
     setError("");
     setSubmitting(true);
+
     try {
       const response = await fetch(
         `${apiBaseUrl}/api/interview-sessions/${sessionId}/answers`,
@@ -124,57 +102,57 @@ export function ActiveInterview({
           body: JSON.stringify({ answer: text }),
         },
       );
+
       const result = (await response.json()) as {
         session?: Session;
         error?: string;
       };
+
       if (!response.ok || !result.session) {
         setError(result.error ?? "Answer could not be submitted.");
-        return false;
+        return;
       }
+
       setSession(result.session);
-      return true;
+      voice.clearTranscript();
     } catch {
       setError("Answer could not be submitted. Check your connection.");
-      return false;
     } finally {
       setSubmitting(false);
     }
   }
 
-  async function submitAnswer(
-    event: FormEvent<HTMLFormElement>,
-  ): Promise<void> {
-    event.preventDefault();
-    if (await submitAnswerText(answer)) setAnswer("");
-  }
-
-  async function submitVoiceResponse(): Promise<void> {
-    if (await submitAnswerText(voice.transcript)) voice.clearTranscript();
-  }
-
   async function terminate(): Promise<void> {
     setError("");
-    const response = await fetch(
-      `${apiBaseUrl}/api/interview-sessions/${sessionId}/close`,
-      {
-        method: "POST",
-        credentials: "include",
-      },
-    );
-    const result = (await response.json()) as {
-      session?: Session;
-      error?: string;
-    };
-    if (!response.ok || !result.session) {
-      setError(result.error ?? "Interview could not be closed.");
-      return;
+
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/api/interview-sessions/${sessionId}/close`,
+        {
+          method: "POST",
+          credentials: "include",
+        },
+      );
+
+      const result = (await response.json()) as {
+        session?: Session;
+        error?: string;
+      };
+
+      if (!response.ok || !result.session) {
+        setError(result.error ?? "Interview could not be closed.");
+        return;
+      }
+
+      setSession(result.session);
+    } catch {
+      setError("Interview could not be closed. Check your connection.");
     }
-    setSession(result.session);
   }
 
   async function submitExpectedScore(): Promise<void> {
     const numericScore = Number(closingScore);
+
     if (
       !Number.isFinite(numericScore) ||
       numericScore < 0 ||
@@ -183,50 +161,71 @@ export function ActiveInterview({
       setError("Provide a valid expected score from 0 to 100.");
       return;
     }
+
     setError("");
     setSubmittingScore(true);
-    const response = await fetch(
-      `${apiBaseUrl}/api/interview-sessions/${sessionId}/expected-score`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ expectedScore: numericScore }),
-      },
-    );
-    const result = (await response.json()) as {
-      session?: Session;
-      error?: string;
-    };
-    setSubmittingScore(false);
-    if (!response.ok || !result.session) {
-      setError(result.error ?? "Expected score could not be submitted.");
-      return;
+
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/api/interview-sessions/${sessionId}/expected-score`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ expectedScore: numericScore }),
+        },
+      );
+
+      const result = (await response.json()) as {
+        session?: Session;
+        error?: string;
+      };
+
+      if (!response.ok || !result.session) {
+        setError(result.error ?? "Expected score could not be submitted.");
+        return;
+      }
+
+      setSession(result.session);
+      setClosingScore("");
+    } catch {
+      setError(
+        "Expected score could not be submitted. Check your connection.",
+      );
+    } finally {
+      setSubmittingScore(false);
     }
-    setSession(result.session);
-    setClosingScore("");
   }
 
   async function loadResults(forceGenerate = false): Promise<void> {
     setError("");
     setLoadingResults(true);
-    const response = await fetch(
-      `${apiBaseUrl}/api/interview-sessions/${sessionId}/${forceGenerate ? "evaluate" : "results"}`,
-      {
-        method: forceGenerate ? "POST" : "GET",
-        credentials: "include",
-      },
-    );
-    const result = (await response.json()) as {
-      evaluation?: EvaluationResult;
-      error?: string;
-    };
-    setLoadingResults(false);
-    if (!response.ok || !result.evaluation) {
-      setError(result.error ?? "Evaluation could not be generated.");
-      return;
+
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/api/interview-sessions/${sessionId}/${forceGenerate ? "evaluate" : "results"}`,
+        {
+          method: forceGenerate ? "POST" : "GET",
+          credentials: "include",
+        },
+      );
+
+      const result = (await response.json()) as {
+        evaluation?: EvaluationResult;
+        error?: string;
+      };
+
+      if (!response.ok || !result.evaluation) {
+        setError(result.error ?? "Evaluation could not be generated.");
+        return;
+      }
+
+      setEvaluation(result.evaluation);
+    } catch {
+      setError("Evaluation could not be loaded. Check your connection.");
+    } finally {
+      setLoadingResults(false);
     }
-    setEvaluation(result.evaluation);
   }
 
   useEffect(() => {
@@ -235,18 +234,21 @@ export function ActiveInterview({
     }
   }, [evaluation, loadingResults, session?.state]);
 
-  if (loading)
+  if (loading) {
     return (
       <section className="session-entry">
         <p className="status">Loading interview...</p>
       </section>
     );
-  if (!session)
+  }
+
+  if (!session) {
     return (
       <section className="session-entry">
-        <p className="error">{error}</p>
+        <p className="error">{error || "Interview session not found."}</p>
       </section>
     );
+  }
 
   if (session.state === "closing") {
     return (
@@ -258,9 +260,10 @@ export function ActiveInterview({
         <h2 id="session-state-heading">Interview wrapping up.</h2>
         <p className="note">
           Thank you for participating. Before we finish, share the score you
-          expected to receive — this is a self-assessment and stays separate
+          expected to receive. This is a self-assessment and stays separate
           from the actual evaluation.
         </p>
+
         <div className="question-panel">
           <label>
             Expected score
@@ -274,16 +277,20 @@ export function ActiveInterview({
               disabled={submittingScore}
             />
           </label>
+
           <div className="configuration-actions">
             <button
               type="button"
               onClick={() => void submitExpectedScore()}
               disabled={submittingScore}
             >
-              {submittingScore ? "Submitting..." : "Submit expected score"}
+              {submittingScore
+                ? "Submitting..."
+                : "Submit expected score"}
             </button>
           </div>
         </div>
+
         {error && <p className="error">{error}</p>}
       </section>
     );
@@ -298,11 +305,14 @@ export function ActiveInterview({
         <p className="eyebrow">Interview complete</p>
         <h2 id="session-state-heading">Results are ready.</h2>
         <p className="note">
-          The actual evaluation below comes from your interview evidence and is
+          The actual evaluation comes from your interview evidence and is
           kept separate from your self-assessment.
         </p>
+
         {session.expectedScore != null && (
-          <p className="note">Your self-assessment: {session.expectedScore}</p>
+          <p className="note">
+            Your self-assessment: {session.expectedScore} / 100
+          </p>
         )}
 
         {!evaluation && (
@@ -324,55 +334,57 @@ export function ActiveInterview({
               <strong>{evaluation.actualScore}</strong>
               <span>actual score / 100</span>
             </div>
+
             <div className="results-assessment">
-              <p className="eyebrow">What happened?</p>
+              <p className="eyebrow">Overall assessment</p>
               <p>{evaluation.overallAssessment}</p>
               <p className="results-evidence">
                 <strong>Evidence:</strong> {evaluation.evidenceSummary}
               </p>
             </div>
+
             <div className="results-section">
-              <p>
-                <strong>Strengths</strong>
-              </p>
+              <p><strong>Strengths</strong></p>
               <ul>
                 {evaluation.strengths.map((item) => (
                   <li key={item}>{item}</li>
                 ))}
               </ul>
             </div>
+
             <div className="results-section">
-              <p>
-                <strong>Weaknesses</strong>
-              </p>
+              <p><strong>Weaknesses</strong></p>
               <ul>
                 {evaluation.weaknesses.map((item) => (
                   <li key={item}>{item}</li>
                 ))}
               </ul>
             </div>
+
             <div className="results-section">
-              <p>
-                <strong>Improvement areas</strong>
-              </p>
+              <p><strong>Improvement areas</strong></p>
               <ul>
                 {evaluation.improvementAreas.map((item) => (
                   <li key={item}>{item}</li>
                 ))}
               </ul>
             </div>
+
             <div className="results-section">
-              <p>
-                <strong>Actionable recommendations</strong>
-              </p>
+              <p><strong>What should you practice next?</strong></p>
               <ul>
                 {evaluation.actionableRecommendations.map((item) => (
                   <li key={item}>{item}</li>
                 ))}
               </ul>
             </div>
-            <button type="button" onClick={() => void loadResults(true)}>
-              Retry evaluation
+
+            <button
+              type="button"
+              onClick={() => void loadResults(true)}
+              disabled={loadingResults}
+            >
+              {loadingResults ? "Generating..." : "Retry evaluation"}
             </button>
           </div>
         )}
@@ -394,30 +406,17 @@ export function ActiveInterview({
           Your completed turns were preserved. Evaluation and results belong to
           a later stage of the session.
         </p>
+
         {session.expectedScore != null && (
-          <p className="note">Expected score: {session.expectedScore}</p>
+          <p className="note">
+            Expected score: {session.expectedScore} / 100
+          </p>
         )}
+
         {error && <p className="error">{error}</p>}
       </section>
     );
   }
-
-  const questionPanel = (
-    <div
-      className={
-        session.pendingFollowUpQuestion
-          ? "question-panel is-follow-up"
-          : "question-panel"
-      }
-    >
-      <p className="eyebrow">
-        {session.pendingFollowUpQuestion
-          ? "Follow-up — from your previous response"
-          : "Current question"}
-      </p>
-      <p>{session.currentQuestion}</p>
-    </div>
-  );
 
   return (
     <section
@@ -427,16 +426,18 @@ export function ActiveInterview({
       <div className="sheet">
         <div className="session-header">
           <div>
-            <p className="eyebrow">
-              Interview workspace / {voiceMode && !textFallback ? "voice" : "text"}
-            </p>
+            <p className="eyebrow">Interview workspace / voice</p>
             <h2 id="active-interview-heading">{session.topic}</h2>
           </div>
-          <span className="status numeral">{session.duration} min session</span>
+
+          <span className="status numeral">
+            {session.duration} min session
+          </span>
         </div>
       </div>
+
       <p className="session-context">
-        {session.interviewType} · {session.difficulty} · {session.language} ·
+        {session.interviewType} ? {session.difficulty} ? {session.language} ?
         Question {session.turnCount + 1}
       </p>
 
@@ -446,58 +447,15 @@ export function ActiveInterview({
         </p>
       )}
 
-      {voiceMode && !textFallback ? (
-        <VoiceWorkspace
-          voice={voice}
-          question={session.currentQuestion}
-          isFollowUp={Boolean(session.pendingFollowUpQuestion)}
-          language={session.language}
-          busy={submitting}
-          onSubmit={() => void submitVoiceResponse()}
-          onEnd={() => void terminate()}
-          onUseText={() => setTextFallback(true)}
-        />
-      ) : (
-        <>
-          {voiceMode && (
-            <p className="voice-text-mode-note">
-              <span>You are answering by typing. This is a voice interview.</span>
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => setTextFallback(false)}
-              >
-                Try voice again
-              </button>
-            </p>
-          )}
-          {questionPanel}
-          <form className="sheet answer-form" onSubmit={submitAnswer}>
-            <label>
-              Your response
-              <textarea
-                value={answer}
-                onChange={(event) => setAnswer(event.target.value)}
-                placeholder="Write your answer here"
-                rows={7}
-                disabled={submitting}
-              />
-            </label>
-            <div className="configuration-actions">
-              <button type="submit" disabled={submitting}>
-                {submitting ? "Submitting..." : "Submit answer"}
-              </button>
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={terminate}
-              >
-                End interview
-              </button>
-            </div>
-          </form>
-        </>
-      )}
+      <VoiceWorkspace
+        voice={voice}
+        question={session.currentQuestion}
+        isFollowUp={Boolean(session.pendingFollowUpQuestion)}
+        language={session.language}
+        busy={submitting}
+        onSubmit={() => void submitVoiceResponse()}
+        onEnd={() => void terminate()}
+      />
     </section>
   );
 }

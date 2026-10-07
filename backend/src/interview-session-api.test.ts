@@ -118,7 +118,7 @@ describe("interview session API", () => {
         interviewType: "Technical Interview",
         topic: "JavaScript",
         difficulty: "Medium",
-        duration: 1,
+        duration: 5,
         language: "Hinglish",
         mode: "Text",
       },
@@ -361,3 +361,4 @@ describe("interview session API", () => {
     expect(persisted[0]?.values[0]?.[1]).not.toBeNull();
   });
 });
+
