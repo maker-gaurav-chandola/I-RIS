@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useRef, useState } from "react";
 import { createVoiceSession } from "@/services/voiceSession";
 import { describeMicrophoneError } from "@/components/interview/voiceStateView";
 import type { VoiceSession, VoiceState } from "@/types/voice";
@@ -42,9 +42,20 @@ export function useVoiceInterview({
       sessionId,
       onStateChange: (snapshot) => {
         if (disposed) return;
+
         setState(snapshot.state);
+
         if (snapshot.state === "error") {
           setError(snapshot.errorMessage ?? "Voice connection failed.");
+          return;
+        }
+
+        if (snapshot.state === "listening") {
+          void session.startListening().catch((err) => {
+            if (disposed) return;
+            setError(describeMicrophoneError(err));
+            setState("error");
+          });
         }
       },
       onTranscript: (text, isFinal) => {
@@ -152,3 +163,4 @@ export function useVoiceInterview({
 }
 
 export type VoiceInterviewController = ReturnType<typeof useVoiceInterview>;
+

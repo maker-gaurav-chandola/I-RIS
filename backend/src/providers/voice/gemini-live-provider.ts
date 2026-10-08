@@ -1,12 +1,18 @@
-import { GoogleGenAI, Modality, type LiveServerMessage, type Session } from "@google/genai";
+﻿import { GoogleGenAI, Modality, type LiveServerMessage, type Session } from "@google/genai";
 
 export type GeminiLiveAudioHandler = (audio: string) => void;
+
 export type GeminiLiveTranscriptHandler = (
   transcript: string,
   isFinal: boolean,
   source: "input" | "output",
 ) => void;
-export type GeminiLiveStateHandler = (state: "connected" | "disconnected" | "error") => void;
+
+export type GeminiLiveStateHandler = (
+  state: "connected" | "disconnected" | "error",
+) => void;
+
+export type GeminiLiveTurnCompleteHandler = (source: "input" | "output") => void;
 
 export type GeminiLiveProvider = {
   connect(): Promise<void>;
@@ -17,6 +23,7 @@ export type GeminiLiveProvider = {
   onAudio(handler: GeminiLiveAudioHandler): void;
   onTranscript(handler: GeminiLiveTranscriptHandler): void;
   onState(handler: GeminiLiveStateHandler): void;
+  onTurnComplete(handler: GeminiLiveTurnCompleteHandler): void;
 };
 
 export function createGeminiLiveProvider(options: {
@@ -30,6 +37,7 @@ export function createGeminiLiveProvider(options: {
   let audioHandler: GeminiLiveAudioHandler | null = null;
   let transcriptHandler: GeminiLiveTranscriptHandler | null = null;
   let stateHandler: GeminiLiveStateHandler | null = null;
+  let turnCompleteHandler: GeminiLiveTurnCompleteHandler | null = null;
 
   return {
     async connect() {
@@ -43,7 +51,9 @@ export function createGeminiLiveProvider(options: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {
             voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: "Aoede" },
+              prebuiltVoiceConfig: {
+                voiceName: "Aoede",
+              },
             },
           },
           inputAudioTranscription: {},
@@ -56,6 +66,7 @@ export function createGeminiLiveProvider(options: {
           onopen: () => {
             stateHandler?.("connected");
           },
+
           onmessage: (message: LiveServerMessage) => {
             const audio = message.serverContent?.modelTurn?.parts?.find(
               (part) => Boolean(part.inlineData?.data),
@@ -65,31 +76,47 @@ export function createGeminiLiveProvider(options: {
               audioHandler?.(audio);
             }
 
-            const inputTranscript =
-              message.serverContent?.inputTranscription?.text;
+            const inputTranscription =
+              message.serverContent?.inputTranscription;
 
-            const outputTranscript =
-              message.serverContent?.outputTranscription?.text;
+            const inputTranscript = inputTranscription?.text;
+
+            const outputTranscription =
+              message.serverContent?.outputTranscription;
+
+            const outputTranscript = outputTranscription?.text;
 
             if (inputTranscript) {
+              const inputFinished = Boolean(inputTranscription?.finished);
+
               transcriptHandler?.(
                 inputTranscript,
-                Boolean(message.serverContent?.turnComplete),
+                inputFinished,
                 "input",
               );
+
+              if (inputFinished) {
+                turnCompleteHandler?.("input");
+              }
             }
 
             if (outputTranscript) {
               transcriptHandler?.(
                 outputTranscript,
-                Boolean(message.serverContent?.turnComplete),
+                Boolean(outputTranscription?.finished),
                 "output",
               );
             }
+
+            if (message.serverContent?.turnComplete) {
+              turnCompleteHandler?.("output");
+            }
           },
+
           onerror: () => {
             stateHandler?.("error");
           },
+
           onclose: () => {
             session = null;
             stateHandler?.("disconnected");
@@ -100,13 +127,19 @@ export function createGeminiLiveProvider(options: {
 
     sendQuestion(question: string) {
       if (!session) return;
+
       session.sendClientContent({
-        turns: [{ role: "user", parts: [{ text: question }] }],
+        turns: [
+          {
+            role: "user",
+            parts: [{ text: question }],
+          },
+        ],
         turnComplete: true,
       });
     },
 
-    sendAudio(audio) {
+    sendAudio(audio: Buffer) {
       if (!session) return;
 
       session.sendRealtimeInput({
@@ -141,14 +174,10 @@ export function createGeminiLiveProvider(options: {
     onState(handler) {
       stateHandler = handler;
     },
+
+    onTurnComplete(handler) {
+      turnCompleteHandler = handler;
+    },
   };
 }
-
-
-
-
-
-
-
-
 

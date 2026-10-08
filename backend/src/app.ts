@@ -1,4 +1,4 @@
-import cookie from "@fastify/cookie";
+﻿import cookie from "@fastify/cookie";
 import websocket from "@fastify/websocket";
 import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -123,6 +123,7 @@ export function buildApp(
 
       let inputTranscript = "";
       let connected = false;
+      let processingAnswer = false;
 
       gemini.onAudio((audio) => {
         socket.send(
@@ -156,15 +157,9 @@ export function buildApp(
       });
 
       gemini.onState((state) => {
-        if (state === "connected") {
-          connected = true;
-          socket.send(
-            JSON.stringify({
-              type: "state",
-              state: "listening",
-            }),
-          );
-        }
+          if (state === "connected") {
+            connected = true;
+          }
 
         if (state === "error") {
           socket.send(
@@ -194,6 +189,131 @@ export function buildApp(
         }),
       );
 
+      const processCandidateAnswer = async () => {
+        if (processingAnswer) return;
+
+        const answer = inputTranscript.trim();
+
+        if (!answer) {
+          return;
+        }
+
+        processingAnswer = true;
+        inputTranscript = "";
+
+        socket.send(
+          JSON.stringify({
+            type: "state",
+            state: "processing",
+          }),
+        );
+
+        try {
+          const cookieHeader = Array.isArray(request.headers.cookie)
+            ? request.headers.cookie.join("; ")
+            : request.headers.cookie ?? "";
+
+          const sessionCookie = cookieHeader
+            .split(";")
+            .map((part) => part.trim())
+            .find((part) =>
+              part.startsWith(`${sessionCookieName}=`),
+            );
+
+          const token = sessionCookie?.slice(
+            sessionCookieName.length + 1,
+          );
+
+          const accountId = token
+            ? sessions.get(decodeURIComponent(token))
+            : undefined;
+
+          const account = accountId
+            ? findAccountById(database, accountId)
+            : null;
+
+          const sessionId = new URL(
+            request.url,
+            `http://${request.headers.host ?? "localhost"}`,
+          ).searchParams.get("sessionId");
+
+          if (!account || !sessionId) {
+            throw new Error(
+              "Voice session authentication required.",
+            );
+          }
+
+          const session = await sessionEngine.submitAnswer(
+            account.id,
+            sessionId,
+            answer,
+          );
+
+          socket.send(
+            JSON.stringify({
+              type: "session",
+              session,
+            }),
+          );
+
+          socket.send(
+            JSON.stringify({
+              type: "turnComplete",
+            }),
+          );
+
+          if (
+            session.state === "active" &&
+            session.currentQuestion
+          ) {
+            socket.send(
+              JSON.stringify({
+                type: "state",
+                state: "speaking",
+              }),
+            );
+
+            gemini.sendQuestion(session.currentQuestion);
+          }
+        } catch (error) {
+          console.error(
+            "[VOICE] automatic answer processing failed",
+            error,
+          );
+
+          socket.send(
+            JSON.stringify({
+              type: "error",
+              code: "UNKNOWN",
+              message: "Interview answer processing failed.",
+            }),
+          );
+
+          socket.send(
+            JSON.stringify({
+              type: "state",
+              state: "listening",
+            }),
+          );
+        } finally {
+          processingAnswer = false;
+        }
+      };
+
+      gemini.onTurnComplete((source) => {
+        if (source === "input") {
+          void processCandidateAnswer();
+          return;
+        }
+
+        socket.send(
+          JSON.stringify({
+            type: "state",
+            state: "listening",
+          }),
+        );
+      });
+
       void gemini
         .connect()
         .then(async () => {
@@ -215,6 +335,13 @@ export function buildApp(
           const session = sessionEngine.get(account.id, sessionId);
 
           if (session.currentQuestion) {
+            socket.send(
+              JSON.stringify({
+                type: "state",
+                state: "speaking",
+              }),
+            );
+
             gemini.sendQuestion(session.currentQuestion);
           }
         })
@@ -250,103 +377,9 @@ export function buildApp(
           }
 
           if (message.type === "stopListening") {
-            socket.send(
-              JSON.stringify({
-                type: "state",
-                state: "processing",
-              }),
-            );
-
-            gemini.interrupt();
-
-            const answer = inputTranscript.trim();
-            inputTranscript = "";
-
-            if (!answer) {
-              socket.send(
-                JSON.stringify({
-                  type: "error",
-                  code: "STT_FAILED",
-                  message: "No speech was detected.",
-                }),
-              );
-              socket.send(
-                JSON.stringify({
-                  type: "state",
-                  state: "listening",
-                }),
-              );
-              return;
-            }
-
-            const cookieHeader = Array.isArray(request.headers.cookie) ? request.headers.cookie.join("; ") : request.headers.cookie ?? "";
-          const sessionCookie = cookieHeader.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${sessionCookieName}=`));
-          const token = sessionCookie?.slice(sessionCookieName.length + 1);
-          const accountId = token ? sessions.get(decodeURIComponent(token)) : undefined;
-          const account = accountId ? findAccountById(database, accountId) : null;
-
-          const sessionId = new URL(
-            request.url,
-            `http://${request.headers.host ?? "localhost"}`,
-          ).searchParams.get("sessionId");
-
-            if (!account || !sessionId) {
-              socket.send(
-                JSON.stringify({
-                  type: "error",
-                  code: "CONNECTION_FAILED",
-                  message: "Voice session authentication required.",
-                }),
-              );
-              return;
-            }
-
-            try {
-              const session = await sessionEngine.submitAnswer(
-                account.id,
-                sessionId,
-                answer,
-              );
-
-              socket.send(
-                JSON.stringify({
-                  type: "session",
-                  session,
-                }),
-              );
-
-              socket.send(JSON.stringify({ type: "turnComplete" }));
-
-              if (session.state === "active" && session.currentQuestion) {
-                socket.send(
-                  JSON.stringify({
-                    type: "state",
-                    state: "speaking",
-                  }),
-                );
-
-                gemini.sendQuestion(session.currentQuestion);
-              }
-            } catch (error) {
-              console.error("[VOICE] answer processing failed", error);
-              socket.send(
-                JSON.stringify({
-                  type: "error",
-                  code: "UNKNOWN",
-                  message: "Interview answer processing failed.",
-                }),
-              );
-              socket.send(
-                JSON.stringify({
-                  type: "state",
-                  state: "listening",
-                }),
-              );
-            }
-
+            await processCandidateAnswer();
             return;
           }
-
           socket.send(
             JSON.stringify({
               type: "state",
@@ -646,6 +679,10 @@ export function buildApp(
 
   return app;
 }
+
+
+
+
 
 
 

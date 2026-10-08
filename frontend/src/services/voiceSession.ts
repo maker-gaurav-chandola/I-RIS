@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   VoiceErrorCode,
   VoiceSession,
   VoiceState,
@@ -156,8 +156,18 @@ export function createVoiceSession(
         throw new Error("Voice session is not connected");
       }
 
+      if (microphone.isActive()) {
+        if (state !== "listening") {
+          updateState("listening");
+        }
+        return;
+      }
+
       await microphone.start();
-      updateState("listening");
+
+      if (state !== "listening") {
+        updateState("listening");
+      }
     },
 
     async stopListening() {
@@ -190,3 +200,4 @@ export function createVoiceSession(
     },
   };
 }
+

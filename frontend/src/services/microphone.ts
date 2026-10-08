@@ -15,6 +15,7 @@ export function createMicrophoneCapture(): MicrophoneCapture {
 
   return {
     async start() {
+      console.log("[I-RIS MIC] microphone.start() CALLED");
       if (active) return;
 
       stream = await navigator.mediaDevices.getUserMedia({
@@ -26,6 +27,9 @@ export function createMicrophoneCapture(): MicrophoneCapture {
       });
 
       audioContext = new AudioContext({ sampleRate: 16000 });
+      console.log("[I-RIS MIC] AudioContext state:", audioContext.state);
+      await audioContext.resume();
+      console.log("[I-RIS MIC] AudioContext after resume:", audioContext.state);
       source = audioContext.createMediaStreamSource(stream);
       processor = audioContext.createScriptProcessor(2048, 1, 1);
 
@@ -72,3 +76,5 @@ export function createMicrophoneCapture(): MicrophoneCapture {
     },
   };
 }
+
+
